@@ -3,11 +3,11 @@
 This module performs phase retrieval from a series of out-of-focus focal plane
 images.
 
-The module contains the Opticsetup class, which has methods to simulate and
-to fit a series of defocused images (at least two). The Opticsetup class is
-used to create a model of the optical setup, including in particular the pupil
-function, the defocus coefficients, the illumination coefficients, and various
-other details that define the whole model of the image formation process.
+The module contains the Opticsetup class, which has methods to simulate and to
+fit a series of defocused images (at least two). The Opticsetup class is used to
+create a model of the optical setup, including in particular the pupil function,
+the defocus coefficients, the illumination coefficients, and various other
+details that define the whole model of the image formation process.
 
 The phase retrieval consist in iterating on the phase coefficients of this model
 until the produced images become as close as possible to the user's data, in a
@@ -19,20 +19,20 @@ Marquardt algo.
 
 ## Definition of the optical setiup
 
-1) Definition of the optical setup: The user must provide a data cube or a list of defocused images to be fitted,
+1) The user must provide a data cube or a list of defocused images to be fitted,
    with the defocus in the first dimension, and the image size in the second and
-   third dimensions. The images must be background subtracted, flat-fielded when needed, averaged,
-   with dead pixels removed.
-   The images may possibly be rectangular, but they will be
-   cropped by the procedure to the largest possible square format. The user may also provide
-   (optionally) the coordinates of the center of the image (= the peak of the on-focus image) and the size of the
-   desired square image.  The images shall not be too large, they shall be
-   restricted to an area where some relevant information appears about the PSF,
-   without cutting the interesting features of the PSF too much. If the relevant
-   information is comprised in an area of diameter D, an image size of the order
-   of 1.5*D to 2*D is recommended.
-   The user may either format/crop his own images beforehand and provide the
-   function with appropriate images size, or let the function do it. The
+   third dimensions. The images must be background subtracted, flat-fielded when
+   needed, averaged, with dead pixels removed.
+      The images may possibly be rectangular, but they will be cropped by the
+   procedure to the largest possible square format. The user may also provide
+   (optionally) the coordinates of the center of the image (= the peak of the
+   on-focus image) and the size of the desired square image.  The images shall
+   not be too large, they shall be restricted to an area where some relevant
+   information appears about the PSF, without cutting the interesting features
+   of the PSF too much. If the relevant information is comprised in an area of
+   diameter D, an image size of the order of 1.5*D to 2*D is recommended.
+      The user may either format/crop his own images beforehand and provide
+   the function with appropriate images size, or let the function do it. The
    function will take care of the cropping and the centering of the images. 
 
    Examples of use:
@@ -57,9 +57,9 @@ Marquardt algo.
    ```
 
 
-3) The user must provide the defocus amplitudes, in the same order as the
-   images in the data cube. The coefficients are the defocus distance in [m] at
-   the level of the focal plane where the detector is.
+3) The user must provide the defocus amplitudes, in the same order as the images
+   in the data cube. The coefficients are the defocus distance in [m] at the
+   level of the focal plane where the detector is.
    Assuming that the light propagates from the exit pupil to the exit focal plane,
    - positive value of the focus is for an observation plane placed downstream
      the nominal exit focal plane,
@@ -77,15 +77,15 @@ Marquardt algo.
    - 1: regular polygon
    - 2: ELT shape (not implemented yet)
 
-5) The user must provide the flattening factor of the pupil, useful for defining elliptical pupils.
-   This factor will impact everything that is contained in the pupil, whether it is circular or
-   polygonal. Spiders and obscuration are affected as well. The flattening
-   operates in a direction perpendicular to a "main pupil axis", which
-   orientation is defined the angle of the pupil (see 6. below). The flattening
-   factor can possibly be greater than 1.0 (therefore acting as an expansion
-   factor rather than flattening).
+5) The user must provide the flattening factor of the pupil, useful for defining
+   elliptical pupils. This factor will impact everything that is contained in
+   the pupil, whether it is circular or polygonal. Spiders and obscuration are
+   affected as well. The flattening operates in a direction perpendicular to a
+   "main pupil axis", which orientation is defined the angle of the pupil (see
+   6. below). The flattening factor can possibly be greater than 1.0 (therefore
+   acting as an expansion factor rather than flattening).
 
-6) The  user must  provide  the central obscuration  diameter of the pupil. This
+6) The user must provide the central obscuration diameter of the pupil. This
    factor will create a central obscuration with the same shape as the pupil. It
    also  applies  to polygonal  pupils.  It  has no unit,  it is  expressed as a
    fraction of the pupil diameter. 
@@ -154,7 +154,8 @@ Marquardt algo.
     simulate the impact of detector pixels with an influence shape that would be
     larger than 1 pixel. 
 
-An example of use is given below:
+An example of use is given below, with a fairly elliptic pupil barred with 2
+spiders:
 
 ```python
 import diversity as div
@@ -177,61 +178,58 @@ mysetup = div.Opticsetup(img_collection, xc=None, yc=None, N=None, # image data 
                         object_fwhm_pix=0.4)            # object is 0.4 pixel wide
 ```
 
-First, the user may check that the images are properly centered and cropped by
-displaying the images mysetup.img[k].
-   ```python
-    plt.imshow( mysetup.img[0].T, origin='lower', cmap='gray')
-   ```
+After doing this, we recommend the user to check that the images are properly centered
+and cropped by displaying the images `mysetup.img[k]`.
+WARNING: Don't be surprised, the image centre is expected to be spread at the 4 image
+corners (for reasons related to Fourier transformation).
+```python
+plt.imshow( mysetup.img[0].T, origin='lower', cmap='gray')
+```
 
 Second, it is advisable to look at the image of the pupil, to check that the
 parameters are correct. The pupil image is available in the class:
-   ```python
-    plt.imshow( mysetup.pupilmap.T, origin='lower', cmap='gray')
-   ```
-
-The user may also check that the images are properly centered and cropped by
-displaying the images mysetup.img[k].
-   ```python
-    plt.imshow( mysetup.img[0].T, origin='lower', cmap='gray')
-   ```
+```python
+plt.imshow( mysetup.pupilmap.T, origin='lower', cmap='gray')
+```
 
 The pupil with the illumination can be displayed using the following command: 
-   ```python
-   plt.imshow( mysetup.mappy(mysetup.pupillum).T, origin='lower', cmap='gray')
-   ```
+```python
+plt.imshow( mysetup.mappy(mysetup.pupillum).T, origin='lower', cmap='gray')
+```
 
 
 ## Searching for the aberration coefficients:
 
 The search_phase() function is the central function to perform phase diversity
 fitting. It is invoked as follows:
-   ```python
-    mysetup.search_phase(defoc_z_flag=False,
-                            fratio_flag=False,
-                            wvl_flag=False,
-                            tiptilt_flag=True,
-                            amplitude_flag=True,
-                            background_flag=False,
-                            phase_flag=True,
-                            estimate_snr=False,
-                            verbose=False,
-                            tolerance=1e-5)
-   ```
+```python
+   mysetup.search_phase(defoc_z_flag=False,
+                           fratio_flag=False,
+                           wvl_flag=False,
+                           tiptilt_flag=True,
+                           amplitude_flag=True,
+                           background_flag=False,
+                           phase_flag=True,
+                           estimate_snr=False,
+                           verbose=False,
+                           tolerance=1e-5)
+```
 In this command the user can select which parameters are to be fitted.
 Once executed, the function modifies the attributes of the object, which can be
 accessed using the following commands:
-   ```python
-    mysetup.phase # modal coefficients of the phase
-    mysetup.phase_generator(mysetup.phase) # zonal representation of the phase, all phase points in a row
-    mysetup.mappy(mysetup.phase_generator(mysetup.phase)) # human-readable/plottable 2d representation of the phase
-   ```
+```python
+   mysetup.phase # modal coefficients of the phase
+   mysetup.phase_generator(mysetup.phase) # zonal representation of the phase, all phase points in a row
+   mysetup.mappy(mysetup.phase_generator(mysetup.phase)) # human-readable/plottable 2d representation of the phase
+```
 
-The function `mysetup.search_phase()` starts from a first initial guess of the phase. This guess is only
-made of zeros and has 20 modal terms. It is possible to provide a different
-initial guess by setting the attribute mysetup.phase to a different value before invoking mysetup.search_phase().
-   ```python
-    mysetup.phase = np.zeros(150) # will search 150 modal coefficients instead of 20.
-   ```
+The function `mysetup.search_phase()` starts from a first initial guess of the
+phase. This guess is only made of zeros and has 20 modal terms. It is possible
+to provide a different initial guess by setting the attribute mysetup.phase to a
+different value before invoking `mysetup.search_phase()`.
+```python
+   mysetup.phase = np.zeros(150) # will search 150 modal coefficients instead of 20.
+```
 
 
 
