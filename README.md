@@ -1,4 +1,4 @@
-# Hello, user.
+# Hello, dear User.
 
 This module performs phase retrieval from a series of out-of-focus focal plane
 images.
