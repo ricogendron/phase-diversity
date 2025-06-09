@@ -1,4 +1,4 @@
-# Hello, dear User.
+# Hello, user.
 
 This module performs phase retrieval from a series of out-of-focus focal plane
 images.
@@ -17,7 +17,21 @@ Marquardt algo.
 
 # User manual
 
+The main code is in `diversity.py`, the rest is utilities and libraries.
+The `test` folder contains rubish things, do not use it.
+Just start with a
+```python
+import diversity as div
+```
+then create your optical setup (see paragraph below) and then search the phase
+(paragraph after).
+
+
 ## Definition of the optical setiup
+
+The optical setup is an object that contains all the information required to
+form/compute an image similar to that of the input data, but it contains also
+the experimental images to be processed.
 
 1) The user must provide a data cube or a list of defocused images to be fitted,
    with the defocus in the first dimension, and the image size in the second and
@@ -40,20 +54,20 @@ Marquardt algo.
    # let's assume 3 images, psf is centered on (32,32)
    # img_collection.shape = (3, 64, 64)
    # The image size 64x64 is suitable to work with.
-   mysetup = Opticsetup(img_collection, xc=None, yc=None, N=None, ...
+   mysetup = div.Opticsetup(img_collection, xc=None, yc=None, N=None, ...
    ```
 
    ```python
    # let's assume 3 images, psf is centered, i.e. on (240, 320)
    # img_collection.shape = (3, 480, 640)
    # It's advisable to crop the image to a smaller format, e.g. 64x64 
-   mysetup = Opticsetup(img_collection, xc=None, yc=None, N=64, ...
+   mysetup = div.Opticsetup(img_collection, xc=None, yc=None, N=64, ...
    ```
 
    ```python
    # let's assume 3 images, psf is centered anywhere at (135,450)
    # img_collection.shape = (3, 480, 640)
-   mysetup = Opticsetup(img_collection, xc=135, yc=450, N=64, ...
+   mysetup = div.Opticsetup(img_collection, xc=135, yc=450, N=64, ...
    ```
 
 
@@ -68,7 +82,7 @@ Marquardt algo.
    Example:
    ```python
    # defocus of 0, -0.5mm and 1.0mm
-   mysetup = Opticsetup(img_collection, xc=None, yc=None, N=None, defoc_z=[0.0, -0.5e-3, 1.0e-3], ...)
+   mysetup = div.Opticsetup(img_collection, xc=None, yc=None, N=None, defoc_z=[0.0, -0.5e-3, 1.0e-3], ...)
    ```
 
 4) The user must provide the pupil type. The pupil type is defined by an integer
