@@ -662,21 +662,28 @@ class Opticsetup():
         # Display an image of the retrieved phase, converted to a 2D pupil map
         # and scaled to nanometers
         phi_pupil_nm = self.phase_generator(self.phase) * self.wvl / (2*np.pi) * 1e9
-        phase_map = self.mappy(phi_pupil_nm)
-        plt.clf()
-        plt.imshow(phase_map.T, origin='lower', cmap='gray')
-        plt.title('Retrieved phase map [nm]')
-        plt.colorbar()
         # Print the rms value of the phase
         rms_value = np.std(phi_pupil_nm)
         print(f'  RMS phase value (raw): {rms_value:5.1f} nm rms')
         rms_value = np.sqrt(np.sum(phi_pupil_nm**2 * self.pupillum) / np.sum(self.pupillum))
         print(f'  RMS phase value (weighted): {rms_value:5.1f} nm rms')
+        
+        # Remove the tip-tilt component from the phase, and get statistics.
+        phi_pupil_nm_tt = self.tip * np.sum(phi_pupil_nm*self.tip)/np.sum(self.tip**2) + self.tilt * np.sum(phi_pupil_nm*self.tilt)/np.sum(self.tilt**2)
+        phi_pupil_nm_notilt = phi_pupil_nm - phi_pupil_nm_tt
+        phi_pupil_nm_notilt = phi_pupil_nm_notilt - np.mean(phi_pupil_nm_notilt)
+        # Print the rms value of the phase, without tip-tilt
+        rms_value = np.std(phi_pupil_nm_notilt)
+        print(f'  RMS phase value without TT (raw): {rms_value:5.1f} nm rms')
+        rms_value = np.sqrt(np.sum(phi_pupil_nm_notilt**2 * self.pupillum) / np.sum(self.pupillum))
+        print(f'  RMS phase value without TT (weighted): {rms_value:5.1f} nm rms')
 
-
-
-
-
+        # Graphics
+        phase_map = self.mappy(phi_pupil_nm_notilt)
+        plt.clf()
+        plt.imshow(phase_map.T, origin='lower', cmap='gray')
+        plt.title('Retrieved phase map [nm]')
+        plt.colorbar()
 
 
 
