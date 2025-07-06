@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 plt.ion() # interactive mode on, no need for plt.show() any more
 
 
-def check_image_format(img, xc, yc, N,):
+def check_image_format(img, xc, yc, N):
     """Author: EG
     Convert a list of images to a cube with defocus in the first dimension.
     If the images are not square they will be cut to the largest square format
@@ -149,10 +149,10 @@ class Opticsetup():
 
         self.illum = illum # zernike list of illum, starting with piston
 
-        self.wvl = wvl
+        self.wvl = wvl # wavelength in [m]
 
         self.fratio = fratio # ratio f/D
-        self.pixelSize = pixelSize
+        self.pixelSize = pixelSize # size of pixels in [m]
 
         # Evaluate the number of pixels required in the pupil diameter to
         # match the plate scale of the images
@@ -486,16 +486,50 @@ class Opticsetup():
         return output
 
 
-    def zerphase(self):
+    def zerphase(self, J=21):
         """
         Compute the decomposition of the phase into Zernike coefficients.
-        Warning: this decomposition is only meaningful when the pupil is
-        circular. The result obtained on other pupil shapes must be taken with
-        extreme caution.
 
-        To be written, one beautiful day.
+        Warning: This decomposition only makes sense when the pupil is circular.
+        Results obtained for other pupil shapes may sometimes appear to make
+        sense, but must be treated with extreme caution. Zernike modes are
+        defined as usual as Zi(r/R, theta), with theta=0 directed along the
+        X-axis (horizontally, rather than along the main axis of the pupil). The
+        unitary disk where the Zernike modes are defined, is mapped onto the
+        circle of a diameter defined by the f-ratio. Then, the real pupil of the
+        system acts as a mask over this. The decomposition is performed by
+        de-coupling from the non-orthogonality of the polynomials on the
+        support/mask they are computed and using the native pupil sampling, in
+        such a way that their weighted sum restitutes back the retrieved phase
+        over the system pupil. Values outside the system pupil are meaningless
+        (they should not be computed). On non-circular pupils, RMS values of the
+        coefficients are meaningless.
+        As only a limited number of polynomials are involved (21 by default),
+        their combination may not fully recreate the initial wavefront.
+        Therefore the routine also returns the RMS value of the amount of
+        leftovers that were ignored in the expansion, for information.
+
+        Args:
+            J (int): Optional. Number of the last Zernike mode that is
+                     considered in the decomposition. Default is 21.
+        Return:
+            zervector (1D ndarray) : array of Zernike coeffs, starting at Z_2 to Z_J.
+            resid_nm (float) : RMS value of the remainder not fitted by the Zernike.
         """
-        pass
+        nzer = J-1 # number of Zernike modes (from 2 to J included)
+        wavefront_nm = self.phase_generator(self.phase) * self.wvl / 2 / np.pi * 1e9
+        cubzer = np.zeros((len(wavefront_nm), nzer))
+        for k in range(nzer):
+            i = k+2 # zernike number
+            cubzer[:,k] = zer.zer(self.r, self.theta, i)
+        # projection matrix
+        projzer = np.linalg.pinv(cubzer)
+        # projection
+        zervector = projzer.dot(wavefront_nm)
+        # computation of RMS value of un-fitted residuals, just for info
+        residues = cubzer.dot(zervector) - wavefront_nm
+        resid_rms = residues.std()
+        return zervector, resid_rms
 
 
     def estimate_snr(self, conversion_gain_elec_per_adu):
@@ -550,6 +584,7 @@ class Opticsetup():
                      amplitude_flag=True,
                      background_flag=False,
                      phase_flag=True,
+                     illum_flag=False,
                      estimate_snr=False,
                      verbose=False,
                      tolerance=1e-5):
@@ -580,6 +615,8 @@ class Opticsetup():
                 level of the background of each defocus image. Defaults to False.
             phase_flag (bool | list, optional): flag or list that applies to each
                 modal coefficient of the phase. Defaults to True.
+            illum_flag (bool | list, optional): flag or list for zernike terms of the
+                illumination coeffs of the pupil. Defaults to False.
             estimate_snr (bool, optional): flag for estimating (or not) the weighting
                 coefficients of the fit, based on the signal-to-noise
             verbose (bool, optional): flag for printing things when running. Defaults
@@ -603,11 +640,11 @@ class Opticsetup():
         tmp = np.sum(self.img, axis=(1,2)) - np.median(self.img, axis=(1,2))*self.N**2
         tmp = tmp * self.N**2 / np.sum(self.pupillum**2)
         self.amplitude = np.sqrt(tmp)
-        print(f'Initial amplitude: {self.amplitude}')
+        print(f'Initial amplitude guess: {self.amplitude}')
         # create the list of coefficients to be fitted
         coeffs = self.encode_coefficients(self.defoc_z, self.fratio, self.wvl,
                                           self.a2tip, self.a2tilt, self.amplitude,
-                                          self.background, self.phase)
+                                          self.background, self.phase, self.illum)
         # ........ create the list of flags for the coefficients
         list_flag = np.full(len(self.defoc_z), defoc_z_flag)
         # exception for defocus: one of the coefficients must be fixed
@@ -626,6 +663,10 @@ class Opticsetup():
         list_flag = np.concatenate((list_flag, np.full(len(self.amplitude), amplitude_flag)))
         list_flag = np.concatenate((list_flag, np.full(len(self.background), background_flag)))
         list_flag = np.concatenate((list_flag, np.full(len(self.phase), phase_flag)))
+        # illumination case. First coeff (=piston=flat illum) is never fitted.
+        illum_list_flag = np.full(len(self.illum), illum_flag)
+        illum_list_flag[0] = False
+        list_flag = np.concatenate((list_flag, illum_list_flag))
         # get the indices of the coefficients to be fitted
         (fit_flag,) = list_flag.nonzero()
         # estimate the signal-to-noise ratio of the images in order to provide meaningful w=weights
@@ -645,7 +686,7 @@ class Opticsetup():
         # search for the best coefficients using lmfit
         bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=weight, fit=fit_flag, tol=tolerance, verbose=verbose)
         # decode the coefficients
-        self.defoc_z, self.fratio, self.wvl, self.a2tip, self.a2tilt, self.amplitude, self.background, self.phase = self.decode_coefficients(bestcoeffs)
+        self.defoc_z, self.fratio, self.wvl, self.a2tip, self.a2tilt, self.amplitude, self.background, self.phase, self.illum = self.decode_coefficients(bestcoeffs)
         # Print the values of the best coefficients
         print(f'Best coefficients found:')
         print(f'  defocus        : {self.defoc_z}')
@@ -655,10 +696,7 @@ class Opticsetup():
         print(f'  tilt           : {self.a2tilt}')
         print(f'  amplitude      : {self.amplitude}')
         print(f'  background     : {self.background}')
-        """
-        self.phase = self.phase - np.median(self.phase) # remove the median phase
-        self.phase = symo(self.phase, 2*np.pi) # wrap the phase to [-pi, pi]
-        """
+        print(f'  illumination   : {self.illum}')
         # Display an image of the retrieved phase, converted to a 2D pupil map
         # and scaled to nanometers
         phi_pupil_nm = self.phase_generator(self.phase) * self.wvl / (2*np.pi) * 1e9
@@ -704,7 +742,7 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
     Returns:
         ndarray: 1d array (flattened) of the series of PSF images. 
     """    
-    defoc_z, fratio, wvl, a2tip, a3tilt, amplitude, background, phase = osetup.decode_coefficients(coeffs)
+    defoc_z, fratio, wvl, a2tip, a3tilt, amplitude, background, phase, illum = osetup.decode_coefficients(coeffs)
     # convert defocus coeffs from delta-Z at focal plane, to radians RMS
     defoc_a4 = defoc_z / (16 * np.sqrt(3) * fratio**2) * (2*np.pi) / wvl # in radians RMS
     # compute the various defocus maps (only on useful pixels)
@@ -712,6 +750,7 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
     ph_tiptilt = osetup.tip[None,:] * a2tip[:,None] + osetup.tilt[None,:] * a3tilt[:,None] # shape (nbim, nphi)
     tmp_phase = ph_tiptilt + ph_defoc + osetup.phase_generator(phase)
     # compute the complex field 
+    osetup.pupillum = osetup.compute_illumination(illum)
     tmp = osetup.pupillum[None,:]*np.exp(1j*tmp_phase) # shape (nbim, nphi)
     # transform to a two-dimensional map
     tmp = osetup.mappy(tmp) # shape (nbim, N, N)
@@ -730,3 +769,47 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
         psfs[i,:,:] = np.fft.fft2(np.fft.ifft2(localpsf) * osetup.tf_pixobj).real + background[i]
     return psfs.flatten()
 
+
+
+
+def visualize_images(p : Opticsetup, alpha=1.0):
+    """
+    Allows to see a summary, presented by a graphic display organized in 3
+    columns, of the series of the input data images, the modelled ones, and
+    their differences. 
+
+    Args:
+        p (Opticsetup): the optical setup object
+        alpha (float, optional): a power exponent, to reinforce the visibility
+        of the low-level details. Defaults to 1.0.
+    """
+    def xsoft(image, alpha):
+        # Formats the image to get ready for display with improved contrast.
+        im = np.fft.fftshift(image.T)
+        return np.sign(im) * np.abs(im)**alpha
+
+    coeffs = p.encode_coefficients(p.defoc_z, p.fratio, p.wvl,
+                                    p.a2tip, p.a2tilt, p.amplitude,
+                                    p.background, p.phase, p.illum)
+    psfs = compute_psfs(p, coeffs)
+    retrieved_psf = np.reshape(psfs, p.img.shape)
+    # Display the original and retrieved PSFs
+    plt.figure(2)
+    plt.clf()
+    # Create a nbimx3 grid of subplots
+    fig, axes = plt.subplots(p.nbim, 3, num=2, figsize=(10, 8))  # nbim rows, 3 columns
+    for i in range(p.nbim):
+        # Plot the PSF in the first column
+        axes[i, 0].imshow(xsoft(p.img[i], alpha=alpha), cmap='gray', origin='lower')
+        axes[i, 0].set_title(f"Input PSF {i+1}")
+        axes[i, 0].axis('off')
+        # Plot the other PSF in the second column
+        axes[i, 1].imshow(xsoft(retrieved_psf[i], alpha=alpha), cmap='gray', origin='lower')
+        axes[i, 1].set_title(f"Retrieved PSF {i+1}")
+        axes[i, 1].axis('off')
+        # Plot the PSF difference in the third column
+        axes[i, 2].imshow(xsoft(p.img[i]-retrieved_psf[i], alpha=1.0), cmap='gray', origin='lower')
+        axes[i, 2].set_title(f"Difference PSF {i+1}")
+        axes[i, 2].axis('off')
+    # Adjust layout
+    fig.tight_layout()

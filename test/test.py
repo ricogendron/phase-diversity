@@ -141,31 +141,3 @@ def test(phi_test=None, nn=64, snr=100., object_fwhm_pix=0.0, guess_modes=20, re
 
 
 
-"""
-After a search_phase(), the retrieved parameters are contained in the Opticsetup
-object. The function below is used to display the input images and compare them
-with those resulting from the PSF modelling based on the object parameters.
-
-"""
-def visualize_images(p : Opticsetup):
-    retrieved_psf = p.psf(p.phase)
-    # Display the original and retrieved PSFs
-    plt.figure(2)
-    plt.clf()
-    # Create a 3x2 grid of subplots
-    fig, axes = plt.subplots(p.nbim, 3, num=2, figsize=(10, 8))  # nbim rows, 2 columns
-    for i in range(p.nbim):
-        # Plot the PSF in the first column
-        axes[i, 0].imshow(xsoft(p.img[i]), cmap='gray', origin='lower')
-        axes[i, 0].set_title(f"Input PSF {i+1}")
-        axes[i, 0].axis('off')
-        # Plot the other PSF in the second column
-        axes[i, 1].imshow(xsoft(retrieved_psf[i]), cmap='gray', origin='lower')
-        axes[i, 1].set_title(f"Retrieved PSF {i+1}")
-        axes[i, 1].axis('off')
-        # Plot the PSF difference in the third column
-        axes[i, 2].imshow(xsoft(p.img[i]-retrieved_psf[i], alpha=1.0), cmap='gray', origin='lower')
-        axes[i, 2].set_title(f"Difference PSF {i+1}")
-        axes[i, 2].axis('off')
-    # Adjust layout
-    fig.tight_layout()
