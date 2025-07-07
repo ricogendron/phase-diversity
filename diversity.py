@@ -16,10 +16,38 @@ plt.ion() # interactive mode on, no need for plt.show() any more
 
 
 
+def make_modal_basis(x, y):
+    """Author: EG
+    Compute a modal basis defined on the useful pixels of the pupil with the native sampling.
+    The basis is ordered by increasing spatial frequencies, it is made of orthogonal modes.
+    The two first modes B[:,0:2] are forced to be pure tip and tilt.
+
+    Args:
+        x (ndarray): x coordinate of all the pupil pixels
+        y (ndarray): idem in y
+
+    Returns:
+        2d ndarray: matrix of the column-vectors of the modes
+    """
+    mat = ((x[:,None]-x[None,:])**2 + (y[:,None]-y[None,:])**2)**(5/6)
+    nphi = x.size
+    P = np.eye(nphi) - np.ones((nphi,nphi))/nphi # piston-removal matrix
+    mat = P @ mat @ P
+    # diagonalise the matrix. The eigenvalues are sorted in increasing order
+    s_eig, B = np.linalg.eigh(mat)
+    # Now we will remove the tip and tilt contribution from all the modes
+    ttmat = np.array([x,y]).T  # tip-tilt matrix
+    ttproj = np.linalg.pinv(ttmat) # projection matrix on tip-tilt
+    ttcomp = ttproj.dot(B) # tiptilt contained in every mode
+    B = B - ttmat.dot(ttcomp) # tiptilt removal from all modes
+    B[:,0:2] = ttmat # put tiptilt back in B
+    # Let's normalise the modes
+    B = B / np.sqrt((B**2).sum(axis=0))[None,:]
+    return B
 
 
 def fcrop(img, Ncrop):
-    """
+    """Author: EG
     Crop a series of images of shape (3,N,N) to a size (3,Ncrop,Ncrop) only if
     Ncrop<N, otherwise do nothing. Also do a fftshift before and after cropping,
     as the crop is intended around the pixel [0,0]. This function is useful for
@@ -114,7 +142,7 @@ class Opticsetup():
                  pupilType, flattening, obscuration, angle, nedges,
                  spiderAngle, spiderArms, spiderOffset, illum,
                  wvl, fratio, pixelSize, edgeblur_percent, object_fwhm_pix):
-        """
+        """Author: EG
         Creation of the Opticsetup class.
 
         Args:
@@ -222,11 +250,7 @@ class Opticsetup():
         # pixels of the pupil.
         nphi = self.idx[0].size
         print(f"Number of phase points in the pupil: {nphi}")
-        mat = ((self.tip[:,None]-self.tip[None,:])**2 + (self.tilt[:,None]-self.tilt[None,:])**2)**(5/6)
-        P = np.eye(nphi) - np.ones((nphi,nphi))/nphi # piston-removal matrix
-        mat = P @ mat @ P
-        # diagonalise the matrix. The eigenvalues are sorted in increasing order
-        s_eig, self.phase_basis = np.linalg.eigh(mat)
+        self.phase_basis = make_modal_basis(self.tip, self.tilt) # 2 first modes are tip and tilt
         self.phase = np.zeros(10)
 
         # calculate the pupil illumination using the Zernike polynomials just over the pupil area
@@ -251,7 +275,7 @@ class Opticsetup():
 
 
     def compute_tf_object(self, object_fwhm_pix, type='gaussian'):
-        """
+        """Author: EG
         Compute the Fourier transform of an object, with a given FWHM.
         The object FWHM is given in [pixels].
         The object is assumed to be either a Gaussian, a disk or a square.
@@ -290,26 +314,32 @@ class Opticsetup():
         return object_tf
 
 
-    def phase_generator(self, vector):
-        """
-        Convert the vector of modal coefficients to a zonal (=pixel list) representation of the phase.
-        The phase is computed using the phase basis, which is a set of orthogonal modes
-        defined over the pupil area. The phase is computed only over the pixels of the pupil area.
+    def phase_generator(self, vector, tiptilt=True):
+        """Author: EG
+        Convert the vector of modal coefficients to a zonal (=pixel list)
+        representation of the phase. The phase is computed using the phase
+        basis, which is a set of orthogonal modes defined over the pupil area.
+        The phase is computed only over the pixels of the pupil area.
 
         Args:
-            vector (ndarray)  : vector of modal coefficients to be converted to a zonal (=pixel list)
-                                representation of the phase.
+            vector (ndarray)  : vector of modal coefficients to be converted to a
+                                zonal (=pixel list) representation of the phase.
+            tiptilt (bool)    : optional. The tip/tilt value is filtered out when
+                                False. Default is True. 
         Returns:
-            ndarray: list of the modal phase values in the pupil
+            ndarray: list of the phase values in the pupil
         """        
         n = np.minimum(vector.size, self.phase_basis[0,:].size)
-        # convert the vector to a phase map
-        phase = self.phase_basis[:,:n] @ vector[:n]
+        # convert the modal vector to a list of phase values
+        if tiptilt==True:
+            phase = self.phase_basis[:,0:n] @ vector[0:n]
+        else:
+            phase = self.phase_basis[:,2:n] @ vector[2:n]
         return phase
 
 
     def compute_illumination(self, zernik_illum_array):
-        """
+        """Author: EG
         Compute the amplitude of the pupil illumination, using Zernike
         polynomials weighted by a set of coefficients.
 
@@ -557,7 +587,8 @@ class Opticsetup():
             resid_nm (float) : RMS value of the remainder not fitted by the Zernike.
         """
         nzer = J-1 # number of Zernike modes (from 2 to J included)
-        wavefront_nm = self.phase_generator(self.phase) * self.wvl / 2 / np.pi * 1e9
+        # we suppress the tiptilt from the wavefront
+        wavefront_nm = self.phase_generator(self.phase, tiptilt=False) * self.wvl / 2 / np.pi * 1e9
         cubzer = np.zeros((len(wavefront_nm), nzer))
         for k in range(nzer):
             i = k+2 # zernike number
@@ -567,7 +598,8 @@ class Opticsetup():
         # projection
         zervector = projzer.dot(wavefront_nm)
         # computation of RMS value of un-fitted residuals, just for info
-        residues = cubzer.dot(zervector) - wavefront_nm
+        reconstitued_wavefront_nm = cubzer.dot(zervector)
+        residues = wavefront_nm - reconstitued_wavefront_nm
         resid_rms = residues.std()
         return zervector, resid_rms
 

@@ -158,13 +158,16 @@ the experimental images to be processed.
     no spider. Use [0,0,..,0] when everything is centred.
 
 13) The user must provide the illumination coefficients of the pupil. The
-    illumination map is described using Zernike coefficients (exceptionally
-    they are not meant to describe a phase here!). The first coefficient
-    is the piston term, Z_1(r,t) = 1.00, and therefore correspond to a flat
-    illumination. Therefore for a simple, flat illumination, the list should
-    just be [1.0]. The list can be of any arbitrary length. The order of Zernike
-    modes is that of (Noll 1976), i.e. piston, tip, tilt, defocus, 2 astigs, etc.
-    An edge darkening (gaussian illumination?) can be modelled by [1,0,0,-0.1].
+    illumination map is described using Zernike coefficients (exceptionally they
+    are not meant to describe a phase here!). The first coefficient is the
+    piston term, Z_1(r,t) = 1.00, and therefore correspond to a flat
+    illumination. Therefore for a simple flat illumination, the list should just
+    be [1.0]. The list can be of any arbitrary length. The order of Zernike
+    modes is that of (Noll 1976), i.e. piston, tip, tilt, defocus, 2 astigs,
+    etc. An edge darkening (gaussian illumination?) can be modelled by
+    [1,0,0,-0.1] for instance. This parameter is part of the parameters that can
+    be fitted later on. The length of the array will indicate how many Zernike
+    coefficients will be searched for.
 
 14) The user must provide the wavelength of the light in [m].
 
@@ -253,7 +256,7 @@ fitting. It is invoked as follows:
                            phase_flag=True,
                            illum_flag=False,
                            estimate_snr=False,
-                           verbose=False,
+                           verbose=True,
                            tolerance=1e-5)
 ```
 In the above command the user can select which parameters are to be fitted.
