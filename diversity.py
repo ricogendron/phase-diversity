@@ -15,6 +15,35 @@ import matplotlib.pyplot as plt
 plt.ion() # interactive mode on, no need for plt.show() any more
 
 
+
+
+
+def fcrop(img, Ncrop):
+    """
+    Crop a series of images of shape (3,N,N) to a size (3,Ncrop,Ncrop) only if
+    Ncrop<N, otherwise do nothing. Also do a fftshift before and after cropping,
+    as the crop is intended around the pixel [0,0]. This function is useful for
+    reformatting the large images of size N from the computations, to the small
+    data image format.
+
+    Args:
+        img (ndarray): image cube of shape (nbim,N,N)
+        Ncrop (int): size the images shall be cropped to
+
+    Returns:
+        ndarray: image cube of shape (nbim,Ncrop,Ncrop)
+    """
+    nbim, N, _ = img.shape
+    if Ncrop<N:
+        dN = N-Ncrop
+        dn = dN//2
+        tmp = np.fft.fftshift(img, axes=(1,2))[:, dn:dn+Ncrop, dn:dn+Ncrop]
+        tmp =  np.fft.fftshift(tmp, axes=(1,2))
+        return tmp
+    else:
+        return img
+
+
 def check_image_format(img, xc, yc, N):
     """Author: EG
     Convert a list of images to a cube with defocus in the first dimension.
@@ -83,7 +112,7 @@ def check_image_format(img, xc, yc, N):
 class Opticsetup():
     def __init__(self, img_collection, xc, yc, N, defoc_z,
                  pupilType, flattening, obscuration, angle, nedges,
-                 spiderAngle, spiderArms_m, spiderOffset_m, illum,
+                 spiderAngle, spiderArms, spiderOffset, illum,
                  wvl, fratio, pixelSize, edgeblur_percent, object_fwhm_pix):
         """
         Creation of the Opticsetup class.
@@ -91,30 +120,32 @@ class Opticsetup():
         Args:
             img_collection (ndarray | list): data cube (ndefoc, N, N), or a list
                                 of images with a size (N, N) obtained experimentally.
-            xc (int | None): x coordinate of the center of the image. If None, the center of the
+            xc (int | None)   : x coordinate of the center of the image. If None, the center of the
                                 image will be used.
-            yc (int | None): y coordinate of the center of the image. If None, the center of the
+            yc (int | None)   : y coordinate of the center of the image. If None, the center of the
                                 image will be used.
-            N (int | None) : size of the square image. If None, the largest square format that fits in the
-                                original image will be used. If N is odd, it will be forced to even.
+            N (int | None)    : size of the square image. If None, the largest square format that fits
+                                in the original image will be used. If N is odd, it will be forced to
+                                be even.
             defoc_z (ndarray | list): list of the amount of defocus in [m] for each image.
-            pupilType (int): 0: disk/ellipse, 1: polygon, 2: ELT
+            pupilType (int):    0: disk/ellipse, 1: polygon, 2: ELT
             flattening (float): flattening factor of the pupil. Applies to circular (disk) apertures
                                 as well as to polygonal apertures. The flattening operates in a direction
                                 perpendicular to the angle of the pupil. The flattening is defined as
                                 the ratio of the minor axis to the major axis of the ellipse.
-            obscuration (float): obscuration factor of the pupil. Applies to circular (disk) apertures
+            obscuration (float):obscuration factor of the pupil. Applies to circular (disk) apertures
                                 as well as to polygonal apertures.
-            angle (float): angle of the pupil in radians. 
-            nedges (int): number of edges of the polygon pupil. Only useful for polygon pupil.
-            spiderAngle (float): angle of the spider in radians, counted from the axis defined by the
+            angle (float)     : angle of the pupil in radians. 
+            nedges (int)      : number of edges of the polygon pupil. Only useful for polygon pupil.
+            spiderAngle (float):angle of the spider in radians, counted from the axis defined by the
                                 angle of the pupil. 
-            spiderArms_m (list): list of the widths of each spider arms in [m]. The number of arms is
+            spiderArms (list) : list of the widths of each spider arms in [relative units]. The number
+                                of arms is
                                 equal to the number of elements in this list. An empty list [] means
                                 no spider. The arms are assumed to be straight lines.
-            spiderOffset_m (list): list of the offsets the line of each spider arm wrt the centre of the
-                                pupil, in [m]. The length of the list must be equal to the length of the
-                                spiderArms_m list. 
+            spiderOffset (list):list of the offsets the line of each spider arm wrt the centre of the
+                                pupil, in [relative units]. The length of the list must be equal to the
+                                length of the spiderArms list. 
             illum (list | ndarray): illumination coefficients of the pupil. The illumination map is
                                 described using Zernike coefficients. The first coefficient is the
                                 piston term, Z_1(r,t) = 1.00, and correspond to a flat illumination.
@@ -124,11 +155,20 @@ class Opticsetup():
             fratio (float): focal ratio of the setup forming the images of the data cube.
             pixelSize (float): size of the pixel in [m].
             edgeblur_percent (float): percentage of the edge blur applied to the edges of the pupil.
-            object_fwhm_pix (float): FWHM of the object in [pixels]. The object is assumed to be either a Gaussian
-                                or a disk. A value of 0.0 means an infinitely small object.
-        """        
+            object_fwhm_pix (float): FWHM of the object in [pixels]. The object is assumed to be either
+                                a Gaussian or a disk. A value of 0.0 means an infinitely small object.
+        """
+        # format the images and return a cube
         self.img = check_image_format(img_collection, xc, yc, N) # list of images
-        self.nbim, self.N, _ = self.img.shape # number of images
+        # dimensions of the data cube: nbim=number of defocused images, Ncrop = size of data
+        self.nbim, self.Ncrop, _ = self.img.shape # number of images
+        # self.N is the image size for the computations
+        if N is None:
+            self.N = self.Ncrop
+        else:
+            self.N = N
+        print(f'Data image format  : {self.Ncrop}x{self.Ncrop}')
+        print(f'Computation format : {self.N}x{self.N}')
 
         if len(defoc_z)==self.nbim:
             self.defoc_z = np.array(defoc_z)
@@ -142,9 +182,9 @@ class Opticsetup():
         self.nedges = nedges # only useful for polygon pupil
         
         self.spiderAngle = spiderAngle
-        self.spiderArms_m = spiderArms_m
-        self.spiderOffset_m = spiderOffset_m
-        self.nspider = len(self.spiderArms_m)
+        self.spiderArms = spiderArms
+        self.spiderOffset = spiderOffset
+        self.nspider = len(self.spiderArms)
         self.edgeblur = np.maximum(edgeblur_percent, 1e-6) # in percent
 
         self.illum = illum # zernike list of illum, starting with piston
@@ -370,7 +410,7 @@ class Opticsetup():
             arm_angle = self.spiderAngle + i*2*np.pi/self.nspider
             cc = np.cos(arm_angle)
             ss = np.sin(arm_angle)
-            reliefSpiderLeg = (np.abs( u * ss - v * cc + self.spiderOffset_m[i]*self.pdiam) - self.spiderArms_m[i]*self.pdiam/2.0) / blur
+            reliefSpiderLeg = (np.abs( u * ss - v * cc + self.spiderOffset[i]*self.pdiam) - self.spiderArms[i]*self.pdiam/2.0) / blur
             no_spider_zone = (u * cc + v * ss) < 0  # identify the right pupil half where the spider arm is
             reliefSpiderLeg[no_spider_zone] = 42. # set to any number greater than 1.0
             relief = np.minimum(relief, reliefSpiderLeg)
@@ -637,7 +677,7 @@ class Opticsetup():
         # that the SUM of the square of the ifft2 (i.e. the total energy in the
         # image) is equal to the MEAN of the square of E (i.e. the mean energy
         # in the pupil).
-        tmp = np.sum(self.img, axis=(1,2)) - np.median(self.img, axis=(1,2))*self.N**2
+        tmp = np.sum(self.img, axis=(1,2)) - np.median(self.img, axis=(1,2))*self.Ncrop**2
         tmp = tmp * self.N**2 / np.sum(self.pupillum**2)
         self.amplitude = np.sqrt(tmp)
         print(f'Initial amplitude guess: {self.amplitude}')
@@ -767,7 +807,7 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
         # pixels in the image. 
         localpsf = (amplitude[i] * np.abs(np.fft.ifft2( tmp[i,:,:] )))**2
         psfs[i,:,:] = np.fft.fft2(np.fft.ifft2(localpsf) * osetup.tf_pixobj).real + background[i]
-    return psfs.flatten()
+    return fcrop(psfs, osetup.Ncrop).flatten()
 
 
 
@@ -788,10 +828,14 @@ def visualize_images(p : Opticsetup, alpha=1.0):
         im = np.fft.fftshift(image.T)
         return np.sign(im) * np.abs(im)**alpha
 
+    # concatenate all relevant coefficients in a single array, to be ready to
+    # make a call to the minimized function
     coeffs = p.encode_coefficients(p.defoc_z, p.fratio, p.wvl,
                                     p.a2tip, p.a2tilt, p.amplitude,
                                     p.background, p.phase, p.illum)
+    # Call to the central model function (returns all coefficients in a row)
     psfs = compute_psfs(p, coeffs)
+    # Restore the shape of modelled data to be able to display it properly
     retrieved_psf = np.reshape(psfs, p.img.shape)
     # Display the original and retrieved PSFs
     plt.figure(2)
