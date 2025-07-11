@@ -16,15 +16,18 @@ plt.ion() # interactive mode on, no need for plt.show() any more
 
 
 
-def make_modal_basis(x, y):
+def make_modal_basis(x, y, defoc):
     """Author: EG
-    Compute a modal basis defined on the useful pixels of the pupil with the native sampling.
-    The basis is ordered by increasing spatial frequencies, it is made of orthogonal modes.
-    The two first modes B[:,0:2] are forced to be pure tip and tilt.
+    Compute a modal basis defined on the useful pixels of the pupil with the
+    native sampling. The basis is ordered by increasing spatial frequencies, it
+    is made of orthogonal modes. The three first modes B[:,0:3] are forced to be
+    pure tip, tilt and defocus. All the modes are orthogonal to piston.
 
     Args:
-        x (ndarray): x coordinate of all the pupil pixels
+        x (ndarray): x coordinate of all the pupil pixels, normalized to 1. at
+                     the edge of the pupil main axis.
         y (ndarray): idem in y
+        defoc (ndarray): idem for r^2
 
     Returns:
         2d ndarray: matrix of the column-vectors of the modes
@@ -35,12 +38,23 @@ def make_modal_basis(x, y):
     mat = P @ mat @ P
     # diagonalise the matrix. The eigenvalues are sorted in increasing order
     s_eig, B = np.linalg.eigh(mat)
-    # Now we will remove the tip and tilt contribution from all the modes
-    ttmat = np.array([x,y]).T  # tip-tilt matrix
-    ttproj = np.linalg.pinv(ttmat) # projection matrix on tip-tilt
-    ttcomp = ttproj.dot(B) # tiptilt contained in every mode
-    B = B - ttmat.dot(ttcomp) # tiptilt removal from all modes
-    B[:,0:2] = ttmat # put tiptilt back in B
+
+    # Here we already have nice modes. But now we will remove the
+    # tip-tilt-defoc contribution from all the modes, and put tiptiltdefoc
+    # at the beginning of the basis.
+    defocop = defoc - np.mean(defoc) # orthogonalize wrt piston
+    ttmat = np.array([x, y, defocop]).T  # tip-tilt-defoc matrix
+    ttproj = np.linalg.pinv(ttmat) # projection matrix on tip-tilt-defoc
+    ttcomp = ttproj.dot(B) # tiptilt-defoc contained in every mode
+    B = B - ttmat.dot(ttcomp) # tiptilt-defoc removal from all modes
+    # determine where were initially the closest modes resembling to tip, tilt, defoc in the basis
+    ttd_index = np.argmax(np.abs(ttcomp), axis=1)
+    # determine the index where all the other modes were
+    tmp = np.ones_like(x, dtype=bool)
+    tmp[ttd_index] = False
+    (others_index,) = np.nonzero(tmp)
+    # put tiptilt-defoc back in B at the beginning, followed by all the others
+    B = np.concatenate((ttmat, B[:,others_index]), axis=1)
     # Let's normalise the modes
     B = B / np.sqrt((B**2).sum(axis=0))[None,:]
     return B
@@ -141,7 +155,8 @@ class Opticsetup():
     def __init__(self, img_collection, xc, yc, N, defoc_z,
                  pupilType, flattening, obscuration, angle, nedges,
                  spiderAngle, spiderArms, spiderOffset, illum,
-                 wvl, fratio, pixelSize, edgeblur_percent, object_fwhm_pix):
+                 wvl, fratio, pixelSize, edgeblur_percent,
+                 object_fwhm_pix, object_shape='gaussian'):
         """Author: EG
         Creation of the Opticsetup class.
 
@@ -185,6 +200,7 @@ class Opticsetup():
             edgeblur_percent (float): percentage of the edge blur applied to the edges of the pupil.
             object_fwhm_pix (float): FWHM of the object in [pixels]. The object is assumed to be either
                                 a Gaussian or a disk. A value of 0.0 means an infinitely small object.
+            object_shape (str) : Shape of the object, either 'gaussian' or 'disk' or 'square'
         """
         # format the images and return a cube
         self.img = check_image_format(img_collection, xc, yc, N) # list of images
@@ -238,9 +254,10 @@ class Opticsetup():
         self.idx = self.pupilmap.nonzero() # index of pixels of the useful pupil part
 
         # standard variables defined only over the pupil area for zernike evaluation
-        self.tip = self.x[self.idx] / (self.pdiam/4)
-        self.tilt = self.y[self.idx] / (self.pdiam/4)
-        self.r = np.sqrt(self.x[self.idx]**2 + self.y[self.idx]**2) / (self.pdiam/2)
+        rdiam = self.pdiam/2 # pupil radius in pixels
+        self.tip = 2 * self.x[self.idx] / rdiam
+        self.tilt = 2 * self.y[self.idx] / rdiam
+        self.r = np.sqrt(self.x[self.idx]**2 + self.y[self.idx]**2) / rdiam
         self.theta = np.arctan2(self.y[self.idx], self.x[self.idx])
         self.defoc = zer.zer(self.r, self.theta, 4)
 
@@ -250,7 +267,7 @@ class Opticsetup():
         # pixels of the pupil.
         nphi = self.idx[0].size
         print(f"Number of phase points in the pupil: {nphi}")
-        self.phase_basis = make_modal_basis(self.tip, self.tilt) # 2 first modes are tip and tilt
+        self.phase_basis = make_modal_basis(self.tip, self.tilt, self.defoc) # 3 first modes are tip, tilt and defoc
         self.phase = np.zeros(10)
 
         # calculate the pupil illumination using the Zernike polynomials just over the pupil area
@@ -269,7 +286,7 @@ class Opticsetup():
         # FWHM is zero the function compute_tf_object returns the scalar 1.0, to fasten
         # the computation.
         self.tf_pixobj = self.compute_tf_object(1.0, 'square') # pixel MTF
-        self.tf_pixobj = self.tf_pixobj * self.compute_tf_object(object_fwhm_pix, 'gaussian') # object MTF
+        self.tf_pixobj = self.tf_pixobj * self.compute_tf_object(object_fwhm_pix, object_shape) # object MTF
 
 
 
@@ -558,7 +575,8 @@ class Opticsetup():
 
     def zerphase(self, J=21):
         """
-        Compute the decomposition of the phase into Zernike coefficients.
+        Compute the decomposition of the phase (deprived from piston and
+        tip-tilt) into Zernike coefficients.
 
         Warning: This decomposition only makes sense when the pupil is circular.
         Results obtained for other pupil shapes may sometimes appear to make
@@ -573,8 +591,12 @@ class Opticsetup():
         such a way that their weighted sum restitutes back the retrieved phase
         over the system pupil. Values outside the system pupil are meaningless
         (they should not be computed). On non-circular pupils, RMS values of the
-        coefficients are meaningless.
-        As only a limited number of polynomials are involved (21 by default),
+        coefficients are meaningless. The decomposition includes a piston and
+        tiptilt terms, although the phase is piston-free and tilt-free over the
+        pupil aperture. This is required because of the non-orthogonality. The
+        piston and tilt values induced by the various polynomials need to be
+        annihilated by Z_1 and Z_2/3 terms.
+          As only a limited number of polynomials are involved (21 by default),
         their combination may not fully recreate the initial wavefront.
         Therefore the routine also returns the RMS value of the amount of
         leftovers that were ignored in the expansion, for information.
@@ -583,15 +605,15 @@ class Opticsetup():
             J (int): Optional. Number of the last Zernike mode that is
                      considered in the decomposition. Default is 21.
         Return:
-            zervector (1D ndarray) : array of Zernike coeffs, starting at Z_2 to Z_J.
+            zervector (1D ndarray) : array of Zernike coeffs, starting at Z_1 to Z_J.
             resid_nm (float) : RMS value of the remainder not fitted by the Zernike.
         """
-        nzer = J-1 # number of Zernike modes (from 2 to J included)
+        nzer = J # number of Zernike modes (from 1 to J included)
         # we suppress the tiptilt from the wavefront
         wavefront_nm = self.phase_generator(self.phase, tiptilt=False) * self.wvl / 2 / np.pi * 1e9
         cubzer = np.zeros((len(wavefront_nm), nzer))
         for k in range(nzer):
-            i = k+2 # zernike number
+            i = k+1 # zernike number
             cubzer[:,k] = zer.zer(self.r, self.theta, i)
         # projection matrix
         projzer = np.linalg.pinv(cubzer)
@@ -876,11 +898,11 @@ def visualize_images(p : Opticsetup, alpha=1.0):
     fig, axes = plt.subplots(p.nbim, 3, num=2, figsize=(10, 8))  # nbim rows, 3 columns
     for i in range(p.nbim):
         # Plot the PSF in the first column
-        axes[i, 0].imshow(xsoft(p.img[i], alpha=alpha), cmap='gray', origin='lower')
+        axes[i, 0].imshow(xsoft(p.img[i]-p.background[i], alpha=alpha), cmap='gray', origin='lower')
         axes[i, 0].set_title(f"Input PSF {i+1}")
         axes[i, 0].axis('off')
         # Plot the other PSF in the second column
-        axes[i, 1].imshow(xsoft(retrieved_psf[i], alpha=alpha), cmap='gray', origin='lower')
+        axes[i, 1].imshow(xsoft(retrieved_psf[i]-p.background[i], alpha=alpha), cmap='gray', origin='lower')
         axes[i, 1].set_title(f"Retrieved PSF {i+1}")
         axes[i, 1].axis('off')
         # Plot the PSF difference in the third column
