@@ -186,17 +186,19 @@ the experimental images to be processed.
     avoid aliasing and numerical image wrapping due to FFT in the focal plane. A
     value of 3 to 5.0 is usually adequate.
 
-18) The user must provide the FWHM of the object in [pixels]. The object is
-    assumed to be gaussian. Floating-point values smaller than 1 pixel are
-    possible without any sampling issues because the computation is done
-    directly in the Fourier space (multiplication by a broad gaussian function).
-    A value of 0.0 means an infinitely small object (i.e. point-source). The
-    code is prepared for circular and square objects, but the feature is not yet
-    implemented. Note that the same code is used internally to simulate the
-    convolution by the pixel area function, using a square object with a FWHM of
-    1.0 pixel. Therefore, this "object fwhm feature" can also be used to
-    simulate the impact of detector pixels with an influence shape that would be
-    larger than 1 pixel. 
+18) The user must provide the FWHM of the object in [pixels]. Floating-point
+    values smaller than 1 pixel are possible without any sampling issues because
+    the computation is done directly in the Fourier space (multiplication by a
+    broad gaussian function). A value of 0.0 means an infinitely small object
+    (i.e. point-source). The code is prepared for circular and square objects,
+    but the feature is not yet implemented. Note that the same code is used
+    internally to simulate the convolution by the pixel area function, using a
+    square object with a FWHM of 1.0 pixel. Therefore, this "object fwhm
+    feature" can also be used to simulate the impact of detector pixels with an
+    influence shape that would be larger than 1 pixel. 
+
+19) The user must provide the type of shape of the object. Possible choices
+    are either 'gaussian', 'disk' or 'square'.
 
 An example of use is given below, with a fairly elliptic pupil barred with 2
 spiders:
@@ -219,7 +221,8 @@ mysetup = div.Opticsetup(img_collection, xc=None, yc=None, N=None, # image data 
                         fratio=18.0,                    # f/D = 18
                         pixelSize=7.4e-6,               # pixel size of 7.4um
                         edgeblur_percent=3.0,           # 3% edge blur
-                        object_fwhm_pix=0.4)            # object is 0.4 pixel wide
+                        object_fwhm_pix=0.4,            # object is 0.4 pixel wide
+                        object_shape='disk')            # object is circular
 ```
 
 After doing this, we recommend the user to check that the images are properly centered
@@ -255,6 +258,7 @@ fitting. It is invoked as follows:
                            background_flag=False,
                            phase_flag=True,
                            illum_flag=False,
+                           objsize_flag=False,
                            estimate_snr=False,
                            verbose=True,
                            tolerance=1e-5)

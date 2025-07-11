@@ -281,12 +281,15 @@ class Opticsetup():
         self.amplitude = np.ones(self.nbim)
         self.background = np.zeros(self.nbim)
 
-        # compute the Fourier transform of the square shape covered by a single pixel
-        # multiplied by the Fourier transform of an object with a given FWHM. When the
-        # FWHM is zero the function compute_tf_object returns the scalar 1.0, to fasten
-        # the computation.
+        # compute the Fourier transform of the square shape covered by a single
+        # pixel. When the FWHM is zero the function compute_tf_object returns
+        # the scalar 1.0, to fasten the computation.
         self.tf_pixobj = self.compute_tf_object(1.0, 'square') # pixel MTF
-        self.tf_pixobj = self.tf_pixobj * self.compute_tf_object(object_fwhm_pix, object_shape) # object MTF
+
+        # Later on, this will be multiplied by the Fourier transform of an
+        # object with a given FWHM. 
+        self.object_shape = object_shape
+        self.object_fwhm_pix = object_fwhm_pix
 
 
 
@@ -679,6 +682,7 @@ class Opticsetup():
                      background_flag=False,
                      phase_flag=True,
                      illum_flag=False,
+                     objsize_flag=False,
                      estimate_snr=False,
                      verbose=False,
                      tolerance=1e-5):
@@ -713,6 +717,8 @@ class Opticsetup():
                 illumination coeffs of the pupil. Defaults to False.
             estimate_snr (bool, optional): flag for estimating (or not) the weighting
                 coefficients of the fit, based on the signal-to-noise
+            objsize_flag (bool, optional): flag for estimating (or not) the diameter
+                of the object
             verbose (bool, optional): flag for printing things when running. Defaults
                 to False.
             tolerance (float, optional): set the value where lmfit will stop iterating.
@@ -720,6 +726,23 @@ class Opticsetup():
         Returns:
             None: The function modifies the attributes of the Opticsetup class
                 in place. The best coefficients are stored in the class attributes.
+        
+        Developper tips:
+        To add a supplementary parameter to the fit, proceed as follows:
+        - function compute_psfs() : 
+            * decode new param in the function
+            * modify the algo to handle the computation related to the new parameter
+        - function search_phase() :
+            * add flag parameter in the list of args
+            * update comments of the docstring about the new arg
+            * encode new param
+            * create the list_flag
+            * decode after lmfit()
+            * print result after decoding
+        - visualize_images() :
+            * encode properly
+        - README.dm
+            * update user's manual
         """
         # we first tune the value of ``self.amplitude`` to start the fit
         # with a rather fair guess. The complex wavefront E in the pupil has an
@@ -738,7 +761,8 @@ class Opticsetup():
         # create the list of coefficients to be fitted
         coeffs = self.encode_coefficients(self.defoc_z, self.fratio, self.wvl,
                                           self.a2tip, self.a2tilt, self.amplitude,
-                                          self.background, self.phase, self.illum)
+                                          self.background, self.phase, self.illum,
+                                          self.object_fwhm_pix)
         # ........ create the list of flags for the coefficients
         list_flag = np.full(len(self.defoc_z), defoc_z_flag)
         # exception for defocus: one of the coefficients must be fixed
@@ -761,6 +785,8 @@ class Opticsetup():
         illum_list_flag = np.full(len(self.illum), illum_flag)
         illum_list_flag[0] = False
         list_flag = np.concatenate((list_flag, illum_list_flag))
+        # object diameter
+        list_flag = np.concatenate((list_flag, np.full(1, objsize_flag)))
         # get the indices of the coefficients to be fitted
         (fit_flag,) = list_flag.nonzero()
         # estimate the signal-to-noise ratio of the images in order to provide meaningful w=weights
@@ -778,9 +804,11 @@ class Opticsetup():
             # when snr is not estimated, the fit reduces to a least square
             weight = None
         # search for the best coefficients using lmfit
-        bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=weight, fit=fit_flag, tol=tolerance, verbose=verbose)
+        bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=weight,
+                           fit=fit_flag, tol=tolerance, verbose=verbose)
         # decode the coefficients
-        self.defoc_z, self.fratio, self.wvl, self.a2tip, self.a2tilt, self.amplitude, self.background, self.phase, self.illum = self.decode_coefficients(bestcoeffs)
+        (self.defoc_z, self.fratio, self.wvl, self.a2tip, self.a2tilt, self.amplitude,
+        self.background, self.phase, self.illum, self.object_fwhm_pix) = self.decode_coefficients(bestcoeffs)
         # Print the values of the best coefficients
         print(f'Best coefficients found:')
         print(f'  defocus        : {self.defoc_z}')
@@ -791,6 +819,7 @@ class Opticsetup():
         print(f'  amplitude      : {self.amplitude}')
         print(f'  background     : {self.background}')
         print(f'  illumination   : {self.illum}')
+        print(f'  object fwhm    : {self.object_fwhm_pix}')
         # Display an image of the retrieved phase, converted to a 2D pupil map
         # and scaled to nanometers
         phi_pupil_nm = self.phase_generator(self.phase) * self.wvl / (2*np.pi) * 1e9
@@ -836,7 +865,7 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
     Returns:
         ndarray: 1d array (flattened) of the series of PSF images. 
     """    
-    defoc_z, fratio, wvl, a2tip, a3tilt, amplitude, background, phase, illum = osetup.decode_coefficients(coeffs)
+    defoc_z, fratio, wvl, a2tip, a3tilt, amplitude, background, phase, illum, object_fwhm_pix = osetup.decode_coefficients(coeffs)
     # convert defocus coeffs from delta-Z at focal plane, to radians RMS
     defoc_a4 = defoc_z / (16 * np.sqrt(3) * fratio**2) * (2*np.pi) / wvl # in radians RMS
     # compute the various defocus maps (only on useful pixels)
@@ -848,6 +877,9 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
     tmp = osetup.pupillum[None,:]*np.exp(1j*tmp_phase) # shape (nbim, nphi)
     # transform to a two-dimensional map
     tmp = osetup.mappy(tmp) # shape (nbim, N, N)
+    # compute the fourier transform of the object
+    tf_object = osetup.compute_tf_object(object_fwhm_pix, osetup.object_shape) # object MTF
+    tf_object = tf_object * osetup.tf_pixobj
     # allocate the PSF array
     psfs = np.zeros((osetup.nbim, osetup.N, osetup.N)) # shape (nbim, N, N)
     # Loop over the defocus images: compute the PSF for each defocus, then
@@ -860,7 +892,7 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
         # PSF. Inverse fft ("backward") is normalized (divided) by the number of
         # pixels in the image. 
         localpsf = (amplitude[i] * np.abs(np.fft.ifft2( tmp[i,:,:] )))**2
-        psfs[i,:,:] = np.fft.fft2(np.fft.ifft2(localpsf) * osetup.tf_pixobj).real + background[i]
+        psfs[i,:,:] = np.fft.fft2(np.fft.ifft2(localpsf) * tf_object).real + background[i]
     return fcrop(psfs, osetup.Ncrop).flatten()
 
 
@@ -884,9 +916,9 @@ def visualize_images(p : Opticsetup, alpha=1.0):
 
     # concatenate all relevant coefficients in a single array, to be ready to
     # make a call to the minimized function
-    coeffs = p.encode_coefficients(p.defoc_z, p.fratio, p.wvl,
-                                    p.a2tip, p.a2tilt, p.amplitude,
-                                    p.background, p.phase, p.illum)
+    coeffs = p.encode_coefficients(p.defoc_z, p.fratio, p.wvl, p.a2tip, p.a2tilt,
+                                   p.amplitude, p.background, p.phase, p.illum,
+                                   p.object_fwhm_pix)
     # Call to the central model function (returns all coefficients in a row)
     psfs = compute_psfs(p, coeffs)
     # Restore the shape of modelled data to be able to display it properly
