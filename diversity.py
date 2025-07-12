@@ -219,7 +219,9 @@ class Opticsetup():
         else:
             raise ValueError('Number of images ({self.nbim}) does not match number of defocus ({len(defoc_z)}).')
         
-        self.pupilType = ['disk','polygon','ELT'][pupilType]
+        self.focscale = 1.0
+
+        self.pupilType = ['disk','polygon','ELT'][pupilType] # self.pupilType = ['disk','polygon','VLT','ELT','GMT'][pupilType]  ... one beautiful day
         self.flattening = flattening
         self.obscuration = obscuration
         self.angle = angle
@@ -677,8 +679,7 @@ class Opticsetup():
         return weight
 
     def search_phase(self, defoc_z_flag=False,
-                     fratio_flag=False,
-                     wvl_flag=False,
+                     focscale_flag=False,
                      tiptilt_flag=False,
                      amplitude_flag=True,
                      background_flag=False,
@@ -691,14 +692,14 @@ class Opticsetup():
         """
         Central function to search for the phase modal coefficients leading to
         the series of defocused PSFs that best match the input data. The
-        function can also search for some other coefficients, such as the values
-        of the amount of defocus, the focal ratio, the wavelength, the tip/tilt
-        coefficients related to each individual image, the intensity of each PSF
-        and the background level of each PSF. The function uses the lmfit
-        (Levenberg-Marquardt) function to search for the best coefficients.
-        The arguments of the function are a list of flags that indicate which
-        coefficients should be fitted (when True) and which of them remain fixed
-        (False).
+        function can also tune or search for some other coefficients, such as
+        the values of the amount of defocus, the global scale of focus
+        coefficients, the tip/tilt coefficients related to each individual
+        image, the intensity of each PSF and the background level of each PSF.
+        The function uses the lmfit (Levenberg-Marquardt) function to search for
+        the best coefficients. The arguments of the function are a list of flags
+        that indicate which coefficients should be fitted (when True) and which
+        of them remain fixed (False).
 
         Args:
             defoc_z_flag (bool | list, optional): flag or list of flag for defocus.
@@ -706,7 +707,8 @@ class Opticsetup():
                 At least one defocus coefficient must be fixed (False) to avoid 
                 singularity in the fit. If a list is provided, it must have the same
                 length as the defocus coefficients. Defaults to False.
-            fratio_flag (bool, optional): flag for f-ratio. Defaults to False.
+            focscale_flag (bool, optional): flag for adjusting a global scaling factor
+                on the defocus coefficients. Defaults to False.
             wvl_flag (bool, optional): flag for the wavelength. Defaults to False.
             tiptilt_flag (bool | list, optional): flag for tip and tilt. Defaults to False.
             amplitude_flag (bool | list, optional): flag for image intensity. Recommended
@@ -761,7 +763,7 @@ class Opticsetup():
         self.amplitude = np.sqrt(tmp)
         print(f'Initial amplitude guess: {self.amplitude}')
         # create the list of coefficients to be fitted
-        coeffs = self.encode_coefficients(self.defoc_z, self.fratio, self.wvl,
+        coeffs = self.encode_coefficients(self.defoc_z, self.focscale,
                                           self.a2tip, self.a2tilt, self.amplitude,
                                           self.background, self.phase, self.illum,
                                           self.object_fwhm_pix)
@@ -770,8 +772,8 @@ class Opticsetup():
         # exception for defocus: one of the coefficients must be fixed
         if np.sum(list_flag)==self.nbim:
             list_flag[0] = False
-        list_flag = np.concatenate((list_flag, np.full(1, fratio_flag)))
-        list_flag = np.concatenate((list_flag, np.full(1, wvl_flag)))
+        # global scaling factor on defocus values
+        list_flag = np.concatenate((list_flag, np.full(1, focscale_flag)))
         # tip-tilt case
         tiptilt_list_flag = np.full(len(self.a2tip), tiptilt_flag)
         # same exception as for defocus: one of the tiptilt coefficients must be fixed
@@ -809,12 +811,12 @@ class Opticsetup():
         bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=weight,
                            fit=fit_flag, tol=tolerance, verbose=verbose)
         # decode the coefficients
-        (self.defoc_z, self.fratio, self.wvl, self.a2tip, self.a2tilt, self.amplitude,
+        (self.defoc_z, self.focscale, self.a2tip, self.a2tilt, self.amplitude,
         self.background, self.phase, self.illum, self.object_fwhm_pix) = self.decode_coefficients(bestcoeffs)
         # Print the values of the best coefficients
         print(f'Best coefficients found:')
         print(f'  defocus        : {self.defoc_z}')
-        print(f'  fratio         : {self.fratio:5.2f}')
+        print(f'  focus scale    : {self.focscale:5.3f}')
         print(f'  wvl            : {self.wvl*1e9} nm')
         print(f'  tip            : {self.a2tip}')
         print(f'  tilt           : {self.a2tilt}')
@@ -867,9 +869,9 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
     Returns:
         ndarray: 1d array (flattened) of the series of PSF images. 
     """    
-    defoc_z, fratio, wvl, a2tip, a3tilt, amplitude, background, phase, illum, object_fwhm_pix = osetup.decode_coefficients(coeffs)
+    defoc_z, focscale, a2tip, a3tilt, amplitude, background, phase, illum, object_fwhm_pix = osetup.decode_coefficients(coeffs)
     # convert defocus coeffs from delta-Z at focal plane, to radians RMS
-    defoc_a4 = defoc_z / (16 * np.sqrt(3) * fratio**2) * (2*np.pi) / wvl # in radians RMS
+    defoc_a4 = focscale * defoc_z / (16 * np.sqrt(3) * osetup.fratio**2) * (2*np.pi) / osetup.wvl # in radians RMS
     # compute the various defocus maps (only on useful pixels)
     ph_defoc = osetup.defoc[None,:] * defoc_a4[:,None] # shape (nbim, nphi)
     ph_tiptilt = osetup.tip[None,:] * a2tip[:,None] + osetup.tilt[None,:] * a3tilt[:,None] # shape (nbim, nphi)
@@ -918,7 +920,7 @@ def visualize_images(p : Opticsetup, alpha=1.0):
 
     # concatenate all relevant coefficients in a single array, to be ready to
     # make a call to the minimized function
-    coeffs = p.encode_coefficients(p.defoc_z, p.fratio, p.wvl, p.a2tip, p.a2tilt,
+    coeffs = p.encode_coefficients(p.defoc_z, p.focscale, p.a2tip, p.a2tilt,
                                    p.amplitude, p.background, p.phase, p.illum,
                                    p.object_fwhm_pix)
     # Call to the central model function (returns all coefficients in a row)

@@ -11,8 +11,8 @@ details that define the whole model of the image formation process.
 
 The phase retrieval consist in iterating on the phase coefficients of this model
 until the produced images become as close as possible to the user's data, in a
-(weighted) least-square sense. The minimisation is performed using a Levenberg-
-Marquardt algo.
+(weighted) least-square sense. The minimisation behind is performed using a
+Levenberg-Marquardt algorithm.
 
 
 # User manual
@@ -41,29 +41,29 @@ the experimental images to be processed.
    procedure to the largest possible square format (see below).
 
 2) Optionally the user may also provide the coordinates of the peak of the
-   on-focus image. If not provided, the centre of the image will be assumed.
-   A square-format image will be cropped/extracted, centred on that position.
+   on-focus image. If not provided, the centre of the image will be assumed as
+   to where the optical axis is. A square-format image will be
+   cropped/extracted, centred on that position.
 
 3) Optionally the size N of the desired square image can be also set.
    - If not set (N=None, by default), the largest possible square format that
      fits into the original image will be used. The data and the computation
-     supports (FFTs) will all be NxN.
+     supports (FFTs) will all be of this same size.
    - If N is set and if the NxN format fits into the data image, then it will be
-     used. The data and the computation supports (FFTs) will all be NxN as the
-     case before.
+     used. The data and the computation supports (FFTs) will all be NxN.
    - If N is set but the N × N format exceeds the size of the data image, the
      latter will be cropped to a suitable smaller size. However, the computation
      support size for Fourier transforms will still be NxN. This feature enables
-     work with truncated data images without any truncation effects in the
+     to work with truncated data images without any truncation effects in the
      numerical modelling (only the common part is compared to the data at the
      end).
    When possible, choosing a value N=2^n is an advantage for speeding up the
-   FFTs.
+   FFTs (by numpy.fft), but it's not mandatory.
    The images shall not be too large, they shall be restricted to an area where
    some relevant information appears about the PSF, without cutting the
    interesting features of the PSF too much. If the relevant information (above
    1 sigma of noise) is comprised in an area of diameter D, an image size of the
-   order of 1.5 to 2 D is recommended.
+   order of 1.5 to 2xD is recommended.
    The user may either format/crop his own images beforehand and provide the
    function with appropriate images size, or let the function do it.
 
@@ -79,6 +79,7 @@ the experimental images to be processed.
    ```python
    # Let's assume 3 images, psf peak is centered, i.e. on (240, 320)
    # The image size is img_collection.shape = (3, 480, 640)
+   # The PSF occupies a little portion at the center of the image.
    # Here, it's advisable to crop the image to a smaller format, e.g. 64x64 
    mysetup = div.Opticsetup(img_collection, xc=None, yc=None, N=64, ...
    ```
@@ -108,7 +109,7 @@ the experimental images to be processed.
    Example:
    ```python
    # Examples with defocus of 0, -0.5mm and 1.0mm
-   # Mind the units !
+   # Mind the units : meters !
    mysetup = div.Opticsetup(img_collection, xc=None, yc=None, N=None, defoc_z=[0.0, -0.5e-3, 1.0e-3], ...)
    ```
 
@@ -116,14 +117,14 @@ the experimental images to be processed.
    as follows:
    - 0: disk/ellipse
    - 1: regular polygon
-   - 2: ELT shape (not implemented yet)
+   - 2: ELT shape (not implemented yet, will come soon)
 
 6) The user must provide the flattening factor of the pupil, useful for defining
    elliptical pupils. This factor will impact everything that is contained in
    the pupil, whether it is circular or polygonal. Spiders and obscuration are
    affected as well. The flattening operates in a direction perpendicular to a
-   "main pupil axis", which orientation is defined the angle of the pupil (see
-   6. below). The flattening factor can possibly be greater than 1.0 (therefore
+   "main pupil axis", which orientation is defined the angle of the pupil (see §
+   8. below). The flattening factor can possibly be greater than 1.0 (therefore
    acting as an expansion factor rather than flattening).
 
 7) The user must provide the central obscuration diameter of the pupil. This
@@ -169,7 +170,8 @@ the experimental images to be processed.
     be fitted later on. The length of the array will indicate how many Zernike
     coefficients will be searched for.
 
-14) The user must provide the wavelength of the light in [m].
+14) The user must provide the wavelength of the light in [m]. The simulation is
+    purely monochromatic.
 
 15) The user must provide the focal ratio of the setup forming the images of the
     data cube. The product with the wavelength gives the diameter of the
@@ -188,14 +190,13 @@ the experimental images to be processed.
 
 18) The user must provide the FWHM of the object in [pixels]. Floating-point
     values smaller than 1 pixel are possible without any sampling issues because
-    the computation is done directly in the Fourier space (multiplication by a
-    broad gaussian function). A value of 0.0 means an infinitely small object
-    (i.e. point-source). The code is prepared for circular and square objects,
-    but the feature is not yet implemented. Note that the same code is used
-    internally to simulate the convolution by the pixel area function, using a
-    square object with a FWHM of 1.0 pixel. Therefore, this "object fwhm
-    feature" can also be used to simulate the impact of detector pixels with an
-    influence shape that would be larger than 1 pixel. 
+    the computation is done natively in the Fourier space (multiplication by a
+    broad function). A value of 0.0 means an infinitely small object (i.e.
+    point-source). Note that the same code is used internally to simulate the
+    convolution by the pixel area function, using a square object with a FWHM of
+    1.0 pixel. Therefore, this "object fwhm feature" can also be used to
+    simulate the impact of detector pixels with an influence shape that would be
+    larger than 1 pixel. 
 
 19) The user must provide the type of shape of the object. Possible choices
     are either 'gaussian', 'disk' or 'square'.
@@ -251,8 +252,7 @@ The search_phase() function is the central function to perform phase diversity
 fitting. It is invoked as follows:
 ```python
    mysetup.search_phase(defoc_z_flag=False,
-                           fratio_flag=False,
-                           wvl_flag=False,
+                           focscale_flag=False,
                            tiptilt_flag=True,
                            amplitude_flag=True,
                            background_flag=False,
@@ -264,6 +264,61 @@ fitting. It is invoked as follows:
                            tolerance=1e-5)
 ```
 In the above command the user can select which parameters are to be fitted.
+
+1) `defoc_z_flag` : either a scalar bool (True/False) or a list or array of bool,
+   with a length equal to the number of defocused images. At least one of the
+   elements of this array must be False to set one of the defocus to a fixed
+   value, otherwise the focus will be undetermined. Using the scalar bool value
+   'True' is equivalent to use a full array of 'True', except its first element.
+   Use this when you are unsure of your input defocus values and when option 2)
+   below is not sufficient.
+
+2) `focscale_flag` : bool value. The focscale parameter is a scalar, global
+   scaling factor that comes on top of the values of the defocus. It is set to
+   1.0 by default. It can sometimes be useful to tune it, when one is unsure of
+   the estimation of the global amplitude of the input focus. 
+
+3) `tiptilt_flag` : either a scalar bool (True/False) or a list or array of bool,
+   with a length equal to the number of defocused images. At least one of the
+   elements of this array must be False to set one of the tiptilt to a fixed
+   value, otherwise the tiptilt will be undetermined. Using the scalar bool
+   value 'True' is equivalent to use a full array of 'True', except its first
+   element. The tiptilt value that is searched/optimised here accounts for a
+   potential random displacement of the optical axis between each defocused
+   image. Indeed it often happens that the experimental activation of the
+   defocusing actuator unvoluntarily modifies the image position too.
+
+4) `amplitude_flag` : bool value, True by default. Allows to search for the
+   scaling factors on the total flux of each image.
+
+5) `background_flag` : bool value, True by default. Allows to search for a
+   constant value to be added to each image, in view of compensating a possible
+   additive background value.
+
+6) `phase_flag` : either a scalar bool (True/False) or a list or array of bool,
+   with a length equal to the number of searched modal coefficients
+   (`len(mysetup.phase)`). Allows to search for the modal coefficients of the
+   phase.
+   
+7) `illum_flag` : either a scalar bool (True/False) or a list or array of bool,
+   with a length equal to the number of Zernike coefficients that define the
+   pupil illumination (`len(mysetup.illum)`). The first coefficient of the array
+   (the piston mode, meaning a constant illumination) must be False.
+
+8) `objsize_flag` : scalar bool. Attempt to fit (or not) the size of the object.
+
+9) `estimate_snr` : scalar bool. When `False`, a least-square fit will be
+   performed between the data and the model. When `True`, a weighted
+   least-square fit will be done. The noise will be estimated on the image. This
+   feature kind of .. work (more or less), but is still under development.
+
+10) `verbose` : bool. When `True`, print the iteration number, Chi2 and Progress
+    (i.e. the decrease rate of the Chi2)
+
+11) `tolerance` : float. The minimization stops when `progress < tolerance`.
+
+
+
 Once executed, the function modifies the attributes of the object, which can be
 accessed using the following commands:
 ```python
