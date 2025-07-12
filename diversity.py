@@ -558,13 +558,15 @@ class Opticsetup():
             tuple: tuple containing the original input arguments.
         """        
         ptr = 0
-        output = ()
+        output = () # prepare tuple output to receive other params
+        # 'deckey' is the decode-key that allows us to know what kind of parameter
+        # had been stored
         for deckey in self.wrap:
             datatype, length, shape = deckey
             if datatype=='scalar':
                 output = output + (itemlist[ptr],)
             elif datatype=='list':
-                output = output + (list(itemlist[ptr:ptr+length]),)
+                output = output + (itemlist[ptr:ptr+length].tolist(),)
             elif datatype=='ndarray':
                 tmp = np.reshape(itemlist[ptr:ptr+length], shape)
                 output = output + (tmp,)
