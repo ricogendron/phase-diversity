@@ -10,6 +10,7 @@ Created on Fri Mar 28 18:08:47 2025
 import numpy as np
 import zernike as zer
 from lmfit_thiebaut import lmfit
+from utils import regress, grint
 
 import matplotlib.pyplot as plt
 plt.ion() # interactive mode on, no need for plt.show() any more
@@ -264,13 +265,21 @@ class Opticsetup():
         self.defoc = zer.zer(self.r, self.theta, 4)
 
         # number of phase points that will be treated.
+        nphi = self.idx[0].size
+        print(f"Number of phase points in the pupil: {nphi}")
         # Here we are going to define a new basis for the phase, that will be obtained
         # by diagonalisation of the matrix of the pairwise distances**(5/3) between the useful
         # pixels of the pupil.
-        nphi = self.idx[0].size
-        print(f"Number of phase points in the pupil: {nphi}")
         self.phase_basis = make_modal_basis(self.tip, self.tilt, self.defoc) # 3 first modes are tip, tilt and defoc
         self.phase = np.zeros(10)
+
+        # The modes are normalized in a weird way, that depends on the shape of
+        # the pupil. Below we search the normalisation factor with the zernike
+        # modes in order to be able to retrieve knwon units.
+        # self.convert * self.phase[0:3] --> the coefficients of Zernike modes
+        self.convert = np.array([regress(self.phase_basis[:,0], self.tip),
+                        regress(self.phase_basis[:,1], self.tilt),
+                        regress(self.phase_basis[:,2], self.defoc)])
 
         # calculate the pupil illumination using the Zernike polynomials just over the pupil area
         self.pupillum = self.compute_illumination(self.illum)
@@ -336,7 +345,7 @@ class Opticsetup():
         return object_tf
 
 
-    def phase_generator(self, vector, tiptilt=True):
+    def phase_generator(self, vector, tiptilt=True, defoc=True):
         """Author: EG
         Convert the vector of modal coefficients to a zonal (=pixel list)
         representation of the phase. The phase is computed using the phase
@@ -348,15 +357,20 @@ class Opticsetup():
                                 zonal (=pixel list) representation of the phase.
             tiptilt (bool)    : optional. The tip/tilt value is filtered out when
                                 False. Default is True. 
+            defoc (bool)      : optional. The defoc value is filtered out when
+                                False. Default is True. 
         Returns:
             ndarray: list of the phase values in the pupil
-        """        
+        """
+        # size of the vector where matrix prod shall be done
         n = np.minimum(vector.size, self.phase_basis[0,:].size)
+        # treatment of tiptilt and defoc flags
+        idx = np.ones(n, dtype=bool)
+        idx[0:2] = tiptilt
+        idx[2] = defoc
+        (idx,) = np.nonzero(idx)
         # convert the modal vector to a list of phase values
-        if tiptilt==True:
-            phase = self.phase_basis[:,0:n] @ vector[0:n]
-        else:
-            phase = self.phase_basis[:,2:n] @ vector[2:n]
+        phase = self.phase_basis[:,idx] @ vector[idx]
         return phase
 
 
@@ -580,44 +594,49 @@ class Opticsetup():
         return output
 
 
-    def zerphase(self, J=21):
+    def zerphase(self, J=21, tiptilt=False, defoc=True):
         """
         Compute the decomposition of the phase (deprived from piston and
-        tip-tilt) into Zernike coefficients.
+        tip-tilt by default) into Zernike coefficients. Boolean flags allow the
+        user to either keep or ignore tiptilt and/or defocus in the input phase. 
 
-        Warning: This decomposition only makes sense when the pupil is circular.
-        Results obtained for other pupil shapes may sometimes appear to make
-        sense, but must be treated with extreme caution. Zernike modes are
-        defined as usual as Zi(r/R, theta), with theta=0 directed along the
-        X-axis (horizontally, rather than along the main axis of the pupil). The
-        unitary disk where the Zernike modes are defined, is mapped onto the
-        circle of a diameter defined by the f-ratio. Then, the real pupil of the
-        system acts as a mask over this. The decomposition is performed by
-        de-coupling from the non-orthogonality of the polynomials on the
-        support/mask they are computed and using the native pupil sampling, in
-        such a way that their weighted sum restitutes back the retrieved phase
-        over the system pupil. Values outside the system pupil are meaningless
-        (they should not be computed). On non-circular pupils, RMS values of the
-        coefficients are meaningless. The decomposition includes a piston and
-        tiptilt terms, although the phase is piston-free and tilt-free over the
-        pupil aperture. This is required because of the non-orthogonality. The
-        piston and tilt values induced by the various polynomials need to be
-        annihilated by Z_1 and Z_2/3 terms.
+        Warning: This decomposition only makes full sense when the pupil is
+        circular. For other pupil shapes, the coefficients obtained must be
+        treated with extreme caution. Zernike modes are defined as usual as
+        Zi(r/R, theta), with theta=0 directed along the X-axis (horizontally,
+        rather than along the main axis of the pupil). The unitary disk where
+        the Zernike modes are defined, is mapped onto the circle of a diameter
+        defined by the f-ratio. Then, the real pupil of the system acts as a
+        mask over this. The decomposition is performed by de-coupling from the
+        non-orthogonality of the polynomials on the support/mask they are
+        computed and using the native pupil sampling, in such a way that their
+        weighted sum restitutes back the retrieved phase over the system pupil.
+        Values outside the system pupil are meaningless (they should not be
+        computed). On non-circular pupils, RMS values of the coefficients are
+        meaningless. The decomposition includes a piston and tiptilt terms,
+        although the phase is piston-free and tilt-free over the pupil aperture.
+        This is required because of the non-orthogonality. The piston and tilt
+        values induced by the various polynomials need to be annihilated by Z_1
+        and Z_2/3 terms.
           As only a limited number of polynomials are involved (21 by default),
         their combination may not fully recreate the initial wavefront.
         Therefore the routine also returns the RMS value of the amount of
-        leftovers that were ignored in the expansion, for information.
+        leftovers that were ignored in the expansion, just for information.
 
         Args:
-            J (int): Optional. Number of the last Zernike mode that is
+            J (int, optional) : Number of the last Zernike mode that is
                      considered in the decomposition. Default is 21.
+            tiptilt (bool, optional) : flag to keep or ignore the tiptilt in 
+                    the input phase. Default is False.
+            defoc (bool, optional) : flag to keep/ignore the defocus in the
+                    input phase. Default is True.
         Return:
             zervector (1D ndarray) : array of Zernike coeffs, starting at Z_1 to Z_J.
             resid_nm (float) : RMS value of the remainder not fitted by the Zernike.
         """
         nzer = J # number of Zernike modes (from 1 to J included)
         # we suppress the tiptilt from the wavefront
-        wavefront_nm = self.phase_generator(self.phase, tiptilt=False) * self.wvl / 2 / np.pi * 1e9
+        wavefront_nm = self.phase_generator(self.phase, tiptilt=tiptilt, defoc=defoc) * self.wvl / 2 / np.pi * 1e9
         cubzer = np.zeros((len(wavefront_nm), nzer))
         for k in range(nzer):
             i = k+1 # zernike number
@@ -774,7 +793,7 @@ class Opticsetup():
             list_flag[0] = False
         # global scaling factor on defocus values
         list_flag = np.concatenate((list_flag, np.full(1, focscale_flag)))
-        # tip-tilt case
+        # tip-tilt case (variation of the position of the optical axis)
         tiptilt_list_flag = np.full(len(self.a2tip), tiptilt_flag)
         # same exception as for defocus: one of the tiptilt coefficients must be fixed
         if np.sum(tiptilt_list_flag)==self.nbim:
@@ -783,6 +802,7 @@ class Opticsetup():
         list_flag = np.concatenate((list_flag, tiptilt_list_flag)) # same as tip: this is for tilt
         # amplitude case
         list_flag = np.concatenate((list_flag, np.full(len(self.amplitude), amplitude_flag)))
+        # background
         list_flag = np.concatenate((list_flag, np.full(len(self.background), background_flag)))
         list_flag = np.concatenate((list_flag, np.full(len(self.phase), phase_flag)))
         # illumination case. First coeff (=piston=flat illum) is never fitted.
@@ -810,11 +830,12 @@ class Opticsetup():
         # search for the best coefficients using lmfit
         bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=weight,
                            fit=fit_flag, tol=tolerance, verbose=verbose)
-        # decode the coefficients
+        # decode the coefficients and set/store them in the initial object.
         (self.defoc_z, self.focscale, self.a2tip, self.a2tilt, self.amplitude,
         self.background, self.phase, self.illum, self.object_fwhm_pix) = self.decode_coefficients(bestcoeffs)
-        # Print the values of the best coefficients
-        print(f'Best coefficients found:')
+
+        # ................................. Print the values of found coefficients
+        grint( 'Best coefficients found:')
         print(f'  defocus        : {self.defoc_z}')
         print(f'  focus scale    : {self.focscale:5.3f}')
         print(f'  wvl            : {self.wvl*1e9} nm')
@@ -824,31 +845,84 @@ class Opticsetup():
         print(f'  background     : {self.background}')
         print(f'  illumination   : {self.illum}')
         print(f'  object fwhm    : {self.object_fwhm_pix}')
-        # Display an image of the retrieved phase, converted to a 2D pupil map
-        # and scaled to nanometers
+
+        # .................................. Do phase statistics
         phi_pupil_nm = self.phase_generator(self.phase) * self.wvl / (2*np.pi) * 1e9
         # Print the rms value of the phase
         rms_value = np.std(phi_pupil_nm)
-        print(f'  RMS phase value (raw): {rms_value:5.1f} nm rms')
-        rms_value = np.sqrt(np.sum(phi_pupil_nm**2 * self.pupillum) / np.sum(self.pupillum))
-        print(f'  RMS phase value (weighted): {rms_value:5.1f} nm rms')
+        wrms_value = np.sqrt(np.sum(phi_pupil_nm**2 * self.pupillum) / np.sum(self.pupillum))
+        grint('\nPhase statistics :')
+        print(f'                              (Raw)                   (Weighted)')
+        print(f'  RMS phase value      : {rms_value:6.1f} nm rms             {wrms_value:6.1f} nm rms')
         
         # Remove the tip-tilt component from the phase, and get statistics.
-        phi_pupil_nm_tt = self.tip * np.sum(phi_pupil_nm*self.tip)/np.sum(self.tip**2) + self.tilt * np.sum(phi_pupil_nm*self.tilt)/np.sum(self.tilt**2)
-        phi_pupil_nm_notilt = phi_pupil_nm - phi_pupil_nm_tt
-        phi_pupil_nm_notilt = phi_pupil_nm_notilt - np.mean(phi_pupil_nm_notilt)
+        phi_pupil_nm_notilt = self.phase_generator(self.phase, tiptilt=False) * self.wvl / (2*np.pi) * 1e9
         # Print the rms value of the phase, without tip-tilt
-        rms_value = np.std(phi_pupil_nm_notilt)
-        print(f'  RMS phase value without TT (raw): {rms_value:5.1f} nm rms')
-        rms_value = np.sqrt(np.sum(phi_pupil_nm_notilt**2 * self.pupillum) / np.sum(self.pupillum))
-        print(f'  RMS phase value without TT (weighted): {rms_value:5.1f} nm rms')
+        rms_value_notilt = np.std(phi_pupil_nm_notilt)
+        wrms_value_notilt = np.sqrt(np.sum(phi_pupil_nm_notilt**2 * self.pupillum) / np.sum(self.pupillum))
+        print(f'  RMS val without TT   : {rms_value_notilt:6.1f} nm rms             {wrms_value_notilt:6.1f} nm rms')
 
-        # Graphics
-        phase_map = self.mappy(phi_pupil_nm_notilt)
+        # Remove tilt and defoc components
+        phi_pupil_nm_notiltdef = self.phase_generator(self.phase, tiptilt=False, defoc=False) * self.wvl / (2*np.pi) * 1e9
+        # Print the rms value of the phase, without tip-tilt nor defoc
+        rms_value_notiltdef = np.std(phi_pupil_nm_notiltdef)
+        wrms_value_notiltdef = np.sqrt(np.sum(phi_pupil_nm_notiltdef**2 * self.pupillum) / np.sum(self.pupillum))
+        print(f'  RMS val wo TT & Def  : {rms_value_notiltdef:6.1f} nm rms             {wrms_value_notiltdef:6.1f} nm rms')
+        print(' ')
+
+        # Extract Zernike coefficients of tip, tilt, focus in nm rms
+        ttf = self.convert * self.phase[0:3]
+        a2_nmrms = ttf[0] * self.wvl / (2*np.pi) * 1e9
+        a2_lD = ttf[0] * 4 / (2*np.pi)
+        a2_m = a2_lD * self.wvl * self.fratio
+        a2_pix = a2_m / self.pixelSize
+        a3_nmrms = ttf[1] * self.wvl / (2*np.pi) * 1e9
+        a3_lD = ttf[1] * 4 / (2*np.pi)
+        a3_m = a3_lD * self.wvl * self.fratio
+        a3_pix = a3_m / self.pixelSize
+        a4_nmrms = ttf[2] * self.wvl / (2*np.pi) * 1e9
+        a4_m = a4_nmrms * 16 * np.sqrt(3) * self.fratio**2 * 1e-9
+        a4_pix = a4_m / self.fratio / self.pixelSize
+
+
+        #      12345678901234567890123456789012345678901234567890123456789012345678901234567890
+        grint('Values of tilt and defocus:')
+        print( '                     nm rms              l/D             pixels             mm')
+        print(f'Tip (horizontal) : {a2_nmrms:8.1f}          {a2_lD:8.3f}          {a2_pix:8.3f}          {a2_m*1e3:8.4f}')
+        print(f'Tilt (vertical)  : {a3_nmrms:8.1f}          {a3_lD:8.3f}          {a3_pix:8.3f}          {a3_m*1e3:8.4f}')
+        print(f'Defocus          : {a4_nmrms:8.1f}              x             {a4_pix:8.3f}          {a4_m*1e3:8.4f}')
+        print(' ')
+
+        # ................................. Graphics
+        # Create a 2x2 grid of subplots
+        plt.figure(1)
         plt.clf()
-        plt.imshow(phase_map.T, origin='lower', cmap='gray')
-        plt.title('Retrieved phase map [nm]')
-        plt.colorbar()
+        zone = ((self.N-self.pdiam*1.1)/2, (self.N+self.pdiam*1.1)/2)
+        fig, axes = plt.subplots(2, 2, num=1, figsize=(10, 8))  # nbim rows, 3 columns
+        # Plot the retrieved phase first
+        phase_map = self.mappy(phi_pupil_nm_notilt)
+        im = axes[0, 0].imshow(phase_map.T, cmap='gray', origin='lower')
+        axes[0, 0].set_title(f'Retrieved phase [nm] / {wrms_value_notilt:6.1f} nm rms')
+        axes[0, 0].set_xlim(zone)
+        axes[0, 0].set_ylim(zone)
+        axes[0, 0].axis('off')
+        fig.colorbar(im, ax=axes[0,0])
+        # Plot the retrieved phase with no defocus
+        phase_map = self.mappy(phi_pupil_nm_notiltdef)
+        im = axes[0, 1].imshow(phase_map.T, cmap='gray', origin='lower')
+        axes[0, 1].set_title(f'Retrieved phase [nm] / {wrms_value_notiltdef:6.1f} nm rms')
+        axes[0, 1].set_xlim(zone)
+        axes[0, 1].set_ylim(zone)
+        axes[0, 1].axis('off')
+        fig.colorbar(im, ax=axes[0,1])
+        # Plot the PSF difference in the third column
+        axes[1, 0].imshow(self.mappy(self.pupillum).T, cmap='gray', origin='lower')
+        axes[1, 0].set_title('Pupil illumination')
+        axes[1, 0].set_xlim(zone)
+        axes[1, 0].set_ylim(zone)
+        axes[1, 0].axis('off')
+        # Adjust layout
+        fig.tight_layout()
 
 
 
@@ -943,7 +1017,7 @@ def visualize_images(p : Opticsetup, alpha=1.0):
         axes[i, 1].axis('off')
         # Plot the PSF difference in the third column
         axes[i, 2].imshow(xsoft(p.img[i]-retrieved_psf[i], alpha=1.0), cmap='gray', origin='lower')
-        axes[i, 2].set_title(f"Difference PSF {i+1}")
+        axes[i, 2].set_title(f"Diff input-retrieved {i+1}")
         axes[i, 2].axis('off')
     # Adjust layout
     fig.tight_layout()
