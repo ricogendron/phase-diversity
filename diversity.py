@@ -10,7 +10,7 @@ Created on Fri Mar 28 18:08:47 2025
 import numpy as np
 import zernike as zer
 from lmfit_thiebaut import lmfit
-from utils import regress, grint
+from utils import regress, grint, rrint
 
 import matplotlib.pyplot as plt
 plt.ion() # interactive mode on, no need for plt.show() any more
@@ -285,6 +285,7 @@ class Opticsetup():
         self.pupillum = self.compute_illumination(self.illum)
 
         self.wrap = []
+        self.weight = None
 
         # define some useful variables that will be used later in the lmfit
         self.a2tip = np.zeros(self.nbim)
@@ -485,6 +486,56 @@ class Opticsetup():
         return img
     
 
+    def pupilArtist(self, pltax, color='r', linewidth=0.6):
+        """
+        Don't ask. It's just a first attempt. Not sure it will stay here for long.
+
+        """  
+        def rotation(angle,x,y):
+            c = np.cos(angle)
+            s = np.sin(angle)
+            return (c*x - s*y, s*x + c*y)
+
+        uc, vc = (self.N/2, self.N/2)
+        if self.pupilType=='disk':
+            N = 222
+            th = np.linspace(0, 2*np.pi, N)
+            x = np.cos(th)*self.pdiam/2
+            y = np.sin(th)*self.pdiam*self.flattening/2
+            u, v = rotation(self.angle,x , y)
+            pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+            if self.obscuration>0:
+                u = u * self.obscuration
+                v = v * self.obscuration
+                pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+        elif self.pupilType=='polygon':
+            th = np.linspace(0, 2*np.pi, self.nedges+1, endpoint=True) + np.pi/self.nedges
+            x = np.cos(th)*self.pdiam/2/np.cos(np.pi/self.nedges)
+            y = np.sin(th)*self.pdiam*self.flattening/2/np.cos(np.pi/self.nedges)
+            u, v = rotation(self.angle, x, y)
+            pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+            if self.obscuration>0:
+                u = u * self.obscuration
+                v = v * self.obscuration
+                pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+        else:
+            pass
+
+        # Spiders arms
+        for i in range(self.nspider):
+            arm_angle = self.spiderAngle + i*2*np.pi/self.nspider
+            x = np.array([np.maximum(0, self.obscuration*self.pdiam), self.pdiam]) / 2.
+            y1 = (self.spiderOffset[i] - self.spiderArms[i]/2.) * self.pdiam * np.ones(2)
+            y2 = (self.spiderOffset[i] + self.spiderArms[i]/2.) * self.pdiam * np.ones(2)
+            uu, vv = rotation(arm_angle, x, y1)
+            u, v = rotation(self.angle, uu, vv * self.flattening)
+            pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+            uu, vv = rotation(arm_angle, x, y2)
+            u, v = rotation(self.angle, uu, vv * self.flattening)
+            pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+
+
+
     def psf(self, phase):
         """
         Compute the series of the defocused PSF images based on the
@@ -592,6 +643,95 @@ class Opticsetup():
                 raise ValueError(f'Decoding keyword {datatype} is unknown. Cant decode the sequence.')
             ptr = ptr+length
         return output
+
+
+
+    def manage_fitting_flags(self, defoc_z_flag, focscale_flag,
+                            tiptilt_flag, amplitude_flag, background_flag, phase_flag,
+                            illum_flag, objsize_flag):
+        """
+            Returns the list of the indices of the parameters to be fitted among the
+        "large encoded array" that is passed to the minimisation function, based on
+        all the boolean flags that tell which parameter shall (or not) be fitted as
+        the input.
+            Moreover the function shall manage the problem of redundancies (i.e.
+        parameters that appear twice, or that have identical effects). The redundant
+        degrees of freedom (DoF) must be eliminated. Elimination consists in setting
+        some of them to False, and the choice is done on a case-by-case basis.
+
+            Clearly, this function should work alongside the 'encode' function,
+        given that they are both responsible for constructing the series of
+        coefficients and their fitting index. However, I haven't found a good way of
+        getting the two functions to work together. The encode() function is rather
+        automatic and can cope with any arbitrary input, whereas the
+        manage_fitting_flag() function is highly customised and specific due to its
+        management of DoF duplication. To be improved in a next version.
+
+        Args:
+            osetup (Opticsetup): the optical setup object
+            *args (bool or ndarray(bool)): flags for fitting (or not) the parameters
+
+        Returns:
+            ndarray: the series of indexes of the coefficients to be fitted.
+        """
+        # ........ first expand each scalar bool into a proper array with proper length
+        defoc_z_flag    = np.full(len(self.defoc_z),    defoc_z_flag)
+        focscale_flag   = np.full(1,                      focscale_flag)
+        tiptilt_flag    = np.full(len(self.a2tip),      tiptilt_flag)
+        amplitude_flag  = np.full(len(self.amplitude),  amplitude_flag)
+        background_flag = np.full(len(self.background), background_flag)
+        phase_flag      = np.full(len(self.phase),      phase_flag)
+        illum_flag      = np.full(len(self.illum),      illum_flag)
+        objsize_flag    = np.full(1,                      objsize_flag)
+        # ........ manage redundancy conflicts for tip-tilt : first one count nb of
+        # occurences of a 'True' statement for fitting the parameter (n_true), then one
+        # compares to the number of degrees of freedom (DoF) available for this parameter
+        # and calculate the difference (redundancy), then one applies a fix by imposing
+        # some params flags to False.
+        n_true = np.count_nonzero(tiptilt_flag) + np.count_nonzero(phase_flag[0:1])
+        redundancy = n_true - self.nbim
+        if redundancy>0 :
+            rrint(f'Redundant configuration (+{redundancy}) found for tip.')
+            print(' - Blocking tip DoF on phase vector. Phase will be tip-free.')
+            phase_flag[0] = False
+        # ........ manage redundancy conflicts for tilt
+        n_true = np.count_nonzero(tiptilt_flag) + np.count_nonzero(phase_flag[1:2])
+        redundancy = n_true - self.nbim
+        if redundancy>0 :
+            rrint(f'Redundant configuration (+{redundancy}) found for tilt.')
+            print(' - Blocking tilt DoF on phase vector. Phase will be tilt-free.')
+            phase_flag[1] = False
+        # ........ manage redundancy conflicts for defocus
+        n_true = np.count_nonzero(defoc_z_flag) + np.count_nonzero(phase_flag[2:3]) + np.count_nonzero(focscale_flag)
+        redundancy = n_true - self.nbim
+        if redundancy>0:
+            rrint(f'Redundant configuration (+{redundancy}) found for defocus.')
+            if phase_flag[2]==True:
+                phase_flag[2] = False
+                redundancy -= 1 # decrement
+                print(' - Blocking defocus DoF in the phase vector. Phase will be defocus-free.')
+        if redundancy>0 :
+            i = np.argmax(np.abs(self.defoc_z))
+            if defoc_z_flag[i]==True:
+                defoc_z_flag[i] = False
+                redundancy -= 1 # decrement
+                print(f' - Blocking defocus DoF on defocus vector at position {i+1}.')
+        # ........ manage redundancy conflicts on the amplitude/illumination 
+        n_true = np.count_nonzero(amplitude_flag) + np.count_nonzero(illum_flag[0:1])
+        redundancy = n_true - self.nbim
+        if redundancy>0 :
+            rrint(f'Redundant configuration (+{redundancy}) found for the flux on the images.')
+            print(' - Blocking illumination DoF in the illumination vector.')
+            illum_flag[0] = False
+            redundancy -= 1 # decrement
+
+        list_flag = np.concatenate((defoc_z_flag, focscale_flag, tiptilt_flag, tiptilt_flag,
+                                    amplitude_flag, background_flag, phase_flag, illum_flag,
+                                    objsize_flag))
+        # get the indices of the coefficients to be fitted
+        (fit_flag,) = list_flag.nonzero()
+        return fit_flag
+
 
 
     def zerphase(self, J=21, tiptilt=False, defoc=True):
@@ -771,12 +911,12 @@ class Opticsetup():
         # with a rather fair guess. The complex wavefront E in the pupil has an
         # expression that is roughly:
         # E = amplitude * self.pupillum * exp(1j*phi),
-        # and this goes through an inverse/backward ifft2 transform (that
-        # is normalised by 1/n^2) before being squared to get the PSF.
-        # Parseval's theorem adapted to discrete inverse/backwrad ifft2 states
-        # that the SUM of the square of the ifft2 (i.e. the total energy in the
-        # image) is equal to the MEAN of the square of E (i.e. the mean energy
-        # in the pupil).
+        # and this goes through an inverse/backward ifft2 transform (that is
+        # normalised by 1/n^2) before being squared to get the PSF. Parseval's
+        # theorem adapted to discrete inverse/backwrad ifft2 states that the SUM
+        # of the square of the ifft2 (i.e. the total energy in the image) is
+        # equal to the MEAN of the square of E (i.e. the mean energy in the
+        # pupil).
         tmp = np.sum(self.img, axis=(1,2)) - np.median(self.img, axis=(1,2))*self.Ncrop**2
         tmp = tmp * self.N**2 / np.sum(self.pupillum**2)
         self.amplitude = np.sqrt(tmp)
@@ -786,49 +926,20 @@ class Opticsetup():
                                           self.a2tip, self.a2tilt, self.amplitude,
                                           self.background, self.phase, self.illum,
                                           self.object_fwhm_pix)
-        # ........ create the list of flags for the coefficients
-        list_flag = np.full(len(self.defoc_z), defoc_z_flag)
-        # exception for defocus: one of the coefficients must be fixed
-        if np.sum(list_flag)==self.nbim:
-            list_flag[0] = False
-        # global scaling factor on defocus values
-        list_flag = np.concatenate((list_flag, np.full(1, focscale_flag)))
-        # tip-tilt case (variation of the position of the optical axis)
-        tiptilt_list_flag = np.full(len(self.a2tip), tiptilt_flag)
-        # same exception as for defocus: one of the tiptilt coefficients must be fixed
-        if np.sum(tiptilt_list_flag)==self.nbim:
-            tiptilt_list_flag[0] = False
-        list_flag = np.concatenate((list_flag, tiptilt_list_flag)) # this is for tip
-        list_flag = np.concatenate((list_flag, tiptilt_list_flag)) # same as tip: this is for tilt
-        # amplitude case
-        list_flag = np.concatenate((list_flag, np.full(len(self.amplitude), amplitude_flag)))
-        # background
-        list_flag = np.concatenate((list_flag, np.full(len(self.background), background_flag)))
-        list_flag = np.concatenate((list_flag, np.full(len(self.phase), phase_flag)))
-        # illumination case. First coeff (=piston=flat illum) is never fitted.
-        illum_list_flag = np.full(len(self.illum), illum_flag)
-        illum_list_flag[0] = False
-        list_flag = np.concatenate((list_flag, illum_list_flag))
-        # object diameter
-        list_flag = np.concatenate((list_flag, np.full(1, objsize_flag)))
-        # get the indices of the coefficients to be fitted
-        (fit_flag,) = list_flag.nonzero()
+        # ........ create the list of flags for the coefficients (in the exact
+        # same order as in the call to encode_coefficients() just before !!)
+        fit_flag = self.manage_fitting_flags(defoc_z_flag, focscale_flag,
+                                        tiptilt_flag, amplitude_flag,
+                                        background_flag, phase_flag, illum_flag,
+                                        objsize_flag)
         # estimate the signal-to-noise ratio of the images in order to provide meaningful w=weights
         if estimate_snr==True:
-            weight = self.estimate_snr(None)
-            self.weight = weight
-            # plt.figure(1)
-            # plt.clf()
-            # plt.imshow(weight[0].T, origin='lower', cmap='gray')
-            # plt.title('Weight image')
-            # plt.colorbar()
-            # plt.pause(3)
-            # input('Press Enter to continue...')
+            self.weight = self.estimate_snr(None)
         else:
             # when snr is not estimated, the fit reduces to a least square
-            weight = None
+            self.weight = None
         # search for the best coefficients using lmfit
-        bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=weight,
+        bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=self.weight,
                            fit=fit_flag, tol=tolerance, verbose=verbose)
         # decode the coefficients and set/store them in the initial object.
         (self.defoc_z, self.focscale, self.a2tip, self.a2tilt, self.amplitude,
@@ -836,15 +947,15 @@ class Opticsetup():
 
         # ................................. Print the values of found coefficients
         grint( 'Best coefficients found:')
-        print(f'  defocus        : {self.defoc_z}')
-        print(f'  focus scale    : {self.focscale:5.3f}')
-        print(f'  wvl            : {self.wvl*1e9} nm')
-        print(f'  tip            : {self.a2tip}')
-        print(f'  tilt           : {self.a2tilt}')
-        print(f'  amplitude      : {self.amplitude}')
-        print(f'  background     : {self.background}')
-        print(f'  illumination   : {self.illum}')
-        print(f'  object fwhm    : {self.object_fwhm_pix}')
+        print(f'  focus scale        : {self.focscale:5.3f}')
+        print(f'  defoc * scale [mm] : {self.defoc_z*self.focscale*1e3}')
+        print(f'  wvl                : {self.wvl*1e9} nm')
+        print(f'  tip                : {self.a2tip}')
+        print(f'  tilt               : {self.a2tilt}')
+        print(f'  amplitude          : {self.amplitude}')
+        print(f'  background         : {self.background}')
+        print(f'  illumination       : {self.illum}')
+        print(f'  object fwhm [pix]  : {self.object_fwhm_pix}')
 
         # .................................. Do phase statistics
         phi_pupil_nm = self.phase_generator(self.phase) * self.wvl / (2*np.pi) * 1e9
@@ -883,10 +994,7 @@ class Opticsetup():
         a4_nmrms = ttf[2] * self.wvl / (2*np.pi) * 1e9
         a4_m = a4_nmrms * 16 * np.sqrt(3) * self.fratio**2 * 1e-9
         a4_pix = a4_m / self.fratio / self.pixelSize
-
-
-        #      12345678901234567890123456789012345678901234567890123456789012345678901234567890
-        grint('Values of tilt and defocus:')
+        grint('Values of tilt and defocus of the phase:')
         print( '                     nm rms              l/D             pixels             mm')
         print(f'Tip (horizontal) : {a2_nmrms:8.1f}          {a2_lD:8.3f}          {a2_pix:8.3f}          {a2_m*1e3:8.4f}')
         print(f'Tilt (vertical)  : {a3_nmrms:8.1f}          {a3_lD:8.3f}          {a3_pix:8.3f}          {a3_m*1e3:8.4f}')
@@ -906,6 +1014,7 @@ class Opticsetup():
         axes[0, 0].set_xlim(zone)
         axes[0, 0].set_ylim(zone)
         axes[0, 0].axis('off')
+        self.pupilArtist(axes[0,0])
         fig.colorbar(im, ax=axes[0,0])
         # Plot the retrieved phase with no defocus
         phase_map = self.mappy(phi_pupil_nm_notiltdef)
@@ -914,6 +1023,7 @@ class Opticsetup():
         axes[0, 1].set_xlim(zone)
         axes[0, 1].set_ylim(zone)
         axes[0, 1].axis('off')
+        self.pupilArtist(axes[0,1])
         fig.colorbar(im, ax=axes[0,1])
         # Plot the PSF difference in the third column
         axes[1, 0].imshow(self.mappy(self.pupillum).T, cmap='gray', origin='lower')
@@ -921,6 +1031,8 @@ class Opticsetup():
         axes[1, 0].set_xlim(zone)
         axes[1, 0].set_ylim(zone)
         axes[1, 0].axis('off')
+        self.pupilArtist(axes[1,0])
+        fig.colorbar(im, ax=axes[1,0])
         # Adjust layout
         fig.tight_layout()
 
@@ -1001,6 +1113,11 @@ def visualize_images(p : Opticsetup, alpha=1.0):
     psfs = compute_psfs(p, coeffs)
     # Restore the shape of modelled data to be able to display it properly
     retrieved_psf = np.reshape(psfs, p.img.shape)
+    # Recompute the position of the optical axis in pixels in order to plot it
+    cc = p.img.shape[1] / 2 # centre of the image
+    k = 4 * p.fratio * (1 * p.wvl / 2 / np.pi) / p.pixelSize # convert fact from a2[rad] to pixels
+    optax_x, optax_y = (cc-k*p.a2tip, cc-k*p.a2tilt) # optical axis position in pixels wrt img centre
+    
     # Display the original and retrieved PSFs
     plt.figure(2)
     plt.clf()
@@ -1011,13 +1128,19 @@ def visualize_images(p : Opticsetup, alpha=1.0):
         axes[i, 0].imshow(xsoft(p.img[i]-p.background[i], alpha=alpha), cmap='gray', origin='lower')
         axes[i, 0].set_title(f"Input PSF {i+1}")
         axes[i, 0].axis('off')
+        axes[i, 0].scatter(optax_x[i:i+1], optax_y[i:i+1], marker='+', color='r') # show optical axis
         # Plot the other PSF in the second column
         axes[i, 1].imshow(xsoft(retrieved_psf[i]-p.background[i], alpha=alpha), cmap='gray', origin='lower')
         axes[i, 1].set_title(f"Retrieved PSF {i+1}")
         axes[i, 1].axis('off')
+        axes[i, 1].scatter(optax_x[i:i+1], optax_y[i:i+1], marker='+', color='r') # show optical axis
         # Plot the PSF difference in the third column
         axes[i, 2].imshow(xsoft(p.img[i]-retrieved_psf[i], alpha=1.0), cmap='gray', origin='lower')
         axes[i, 2].set_title(f"Diff input-retrieved {i+1}")
+        axes[i, 2].scatter(optax_x[i:i+1], optax_y[i:i+1], marker='+', color='r') # show optical axis
         axes[i, 2].axis('off')
     # Adjust layout
     fig.tight_layout()
+
+
+

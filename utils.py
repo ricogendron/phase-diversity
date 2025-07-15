@@ -29,3 +29,20 @@ def grint(msg):
     """
     print("\033[32m" + msg + "\033[0m")
 
+def rrint(msg):
+    """
+    Print msg in red.
+
+    Args:
+        msg (str): Message to print.
+    """
+    print("\033[31m" + msg + "\033[0m")
+
+def brint(msg):
+    """
+    Print msg in blue.
+
+    Args:
+        msg (str): Message to print.
+    """
+    print("\033[34m" + msg + "\033[0m")
