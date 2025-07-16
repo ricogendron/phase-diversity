@@ -10,7 +10,7 @@ Created on Fri Mar 28 18:08:47 2025
 import numpy as np
 import zernike as zer
 from lmfit_thiebaut import lmfit
-from utils import regress, grint, rrint
+from utils import regress, grint, rrint, line
 
 import matplotlib.pyplot as plt
 plt.ion() # interactive mode on, no need for plt.show() any more
@@ -212,8 +212,8 @@ class Opticsetup():
             self.N = self.Ncrop
         else:
             self.N = N
-        print(f'Data image format  : {self.Ncrop}x{self.Ncrop}')
-        print(f'Computation format : {self.N}x{self.N}')
+        line('Data image format', f'{self.Ncrop}x{self.Ncrop}')
+        line('Computation format', f'{self.N}x{self.N}')
 
         if len(defoc_z)==self.nbim:
             self.defoc_z = np.array(defoc_z)
@@ -244,8 +244,8 @@ class Opticsetup():
         # Evaluate the number of pixels required in the pupil diameter to
         # match the plate scale of the images
         self.pdiam = self.compute_pupil_diam()
-        print(f"Number of pixels oh phase in the pupil diameter (f/{self.fratio:6.3f}): {self.pdiam:7.3f}")
-        print(f"Angular size of a pixel of phase in the pupil plane: f/{self.fratio*self.pdiam:7.3f}")
+        line(f'Nb of phase pixels pupil diam (f/{self.fratio:6.3f})', self.pdiam, 'pixels')
+        line('Angular size of a phase pixel in pupil plane', f'f/{self.fratio*self.pdiam:7.3f}')
 
         # standard variables
         # create variables x, y over whole square support
@@ -263,10 +263,17 @@ class Opticsetup():
         self.r = np.sqrt(self.x[self.idx]**2 + self.y[self.idx]**2) / rdiam
         self.theta = np.arctan2(self.y[self.idx], self.x[self.idx])
         self.defoc = zer.zer(self.r, self.theta, 4)
+        # conversion coefficients from [radians rms of tilt Zernike] to some
+        # displacement in the focal plane
+        self.rad2dist = 4 * self.fratio * (self.wvl / 2 / np.pi) # convert fact from a2[rad] to metres
+        self.rad2pix = self.rad2dist / self.pixelSize # convert fact from a2[rad] to pixels
+        # conversion coefficient from [radians rms of Zernike defocus] to some
+        # displacement along the optical axis
+        self.rad2z = (self.wvl / (2*np.pi)) * (16 * np.sqrt(3) * self.fratio**2)
 
         # number of phase points that will be treated.
         nphi = self.idx[0].size
-        print(f"Number of phase points in the pupil: {nphi}")
+        line("Number of phase points in the pupil", nphi)
         # Here we are going to define a new basis for the phase, that will be obtained
         # by diagonalisation of the matrix of the pairwise distances**(5/3) between the useful
         # pixels of the pupil.
@@ -288,8 +295,8 @@ class Opticsetup():
         self.weight = None
 
         # define some useful variables that will be used later in the lmfit
-        self.a2tip = np.zeros(self.nbim)
-        self.a2tilt = np.zeros(self.nbim)
+        self.optax_x = np.zeros(self.nbim)
+        self.optax_y = np.zeros(self.nbim)
         self.amplitude = np.ones(self.nbim)
         self.background = np.zeros(self.nbim)
 
@@ -549,7 +556,7 @@ class Opticsetup():
             ndarray 3d: cube of PSF images with the shape (nbim, N, N).
         """        
         # convert defocus coeffs from dZ to radians RMS
-        defoc_a4 = self.defoc_z / (16 * np.sqrt(3) * self.fratio**2) * (2*np.pi) / self.wvl # in radians RMS
+        defoc_a4 = self.defoc_z / self.rad2z  # in radians RMS
         # compute the various defocus maps (only on useful pixels)
         tmp_defoc = self.defoc[None,:] * defoc_a4[:,None] + self.phase_generator(phase) # shape (nbim, nphi)
         tmp = self.pupillum[None,:]*np.exp(1j*tmp_defoc) # shape (nbim, nphi)
@@ -647,7 +654,7 @@ class Opticsetup():
 
 
     def manage_fitting_flags(self, defoc_z_flag, focscale_flag,
-                            tiptilt_flag, amplitude_flag, background_flag, phase_flag,
+                            optax_flag, amplitude_flag, background_flag, phase_flag,
                             illum_flag, objsize_flag):
         """
             Returns the list of the indices of the parameters to be fitted among the
@@ -676,26 +683,27 @@ class Opticsetup():
         """
         # ........ first expand each scalar bool into a proper array with proper length
         defoc_z_flag    = np.full(len(self.defoc_z),    defoc_z_flag)
-        focscale_flag   = np.full(1,                      focscale_flag)
-        tiptilt_flag    = np.full(len(self.a2tip),      tiptilt_flag)
+        focscale_flag   = np.full(1,                    focscale_flag)
+        optax_flag      = np.full(len(self.optax_x),    optax_flag)
         amplitude_flag  = np.full(len(self.amplitude),  amplitude_flag)
         background_flag = np.full(len(self.background), background_flag)
         phase_flag      = np.full(len(self.phase),      phase_flag)
         illum_flag      = np.full(len(self.illum),      illum_flag)
-        objsize_flag    = np.full(1,                      objsize_flag)
-        # ........ manage redundancy conflicts for tip-tilt : first one count nb of
-        # occurences of a 'True' statement for fitting the parameter (n_true), then one
-        # compares to the number of degrees of freedom (DoF) available for this parameter
-        # and calculate the difference (redundancy), then one applies a fix by imposing
-        # some params flags to False.
-        n_true = np.count_nonzero(tiptilt_flag) + np.count_nonzero(phase_flag[0:1])
+        objsize_flag    = np.full(1,                    objsize_flag)
+        # ........ manage redundancy conflicts between tip-tilt and position of
+        # optical axis: first one count nb of occurences of a 'True' statement
+        # for fitting the parameter (n_true), then one compares to the number of
+        # degrees of freedom (DoF) available for this parameter and calculate
+        # the difference (redundancy), then one applies a fix by imposing some
+        # params flags to False.
+        n_true = np.count_nonzero(optax_flag) + np.count_nonzero(phase_flag[0:1])
         redundancy = n_true - self.nbim
         if redundancy>0 :
             rrint(f'Redundant configuration (+{redundancy}) found for tip.')
             print(' - Blocking tip DoF on phase vector. Phase will be tip-free.')
             phase_flag[0] = False
-        # ........ manage redundancy conflicts for tilt
-        n_true = np.count_nonzero(tiptilt_flag) + np.count_nonzero(phase_flag[1:2])
+        # ........ manage redundancy conflicts between tilt & optical axis position
+        n_true = np.count_nonzero(optax_flag) + np.count_nonzero(phase_flag[1:2])
         redundancy = n_true - self.nbim
         if redundancy>0 :
             rrint(f'Redundant configuration (+{redundancy}) found for tilt.')
@@ -725,7 +733,7 @@ class Opticsetup():
             illum_flag[0] = False
             redundancy -= 1 # decrement
 
-        list_flag = np.concatenate((defoc_z_flag, focscale_flag, tiptilt_flag, tiptilt_flag,
+        list_flag = np.concatenate((defoc_z_flag, focscale_flag, optax_flag, optax_flag,
                                     amplitude_flag, background_flag, phase_flag, illum_flag,
                                     objsize_flag))
         # get the indices of the coefficients to be fitted
@@ -810,7 +818,7 @@ class Opticsetup():
             # we assume that the maximum valued pixel contains 500,000 electrons
             # (somewhat arbitrary, but difficult to do better !).
             conversion_gain_elec_per_adu = 500.e3 / np.max(self.img)
-            print(f"Conversion gain not provided. Using {conversion_gain_elec_per_adu:.2e} e-/ADU.")
+            line(f"Conversion gain not provided. Using", conversion_gain_elec_per_adu, "e-/ADU")
         # Trick for computing the RON variance: it will be computed only on the
         # non-illuminated pixels, i.e. on the "left part" of the Gaussian
         # distribution of the RON, identified as being the values smaller than
@@ -822,7 +830,7 @@ class Opticsetup():
         tmp = centred_img.flatten()
         tmpdark = tmp[tmp < 0] # keep only the non-illuminated pixels (dark pixels)
         varRON = np.mean(tmpdark**2) # variance of the readout noise in adu^2
-        print(f"RON standard deviation: {np.sqrt(varRON):.2e} adu rms")
+        line("Estimated RON standard deviation", np.sqrt(varRON), "ADU rms")
         # Computation of the photon noise variance in adu^2 (Poisson law:
         # variance_e- = mean_e-). Note that a^2 = e^2/g^2 = e/g^2 = a.g/g^2 =
         # a/g. This last equation is used below. It seems dimensionally
@@ -839,7 +847,7 @@ class Opticsetup():
 
     def search_phase(self, defoc_z_flag=False,
                      focscale_flag=False,
-                     tiptilt_flag=False,
+                     optax_flag=False,
                      amplitude_flag=True,
                      background_flag=False,
                      phase_flag=True,
@@ -869,7 +877,8 @@ class Opticsetup():
             focscale_flag (bool, optional): flag for adjusting a global scaling factor
                 on the defocus coefficients. Defaults to False.
             wvl_flag (bool, optional): flag for the wavelength. Defaults to False.
-            tiptilt_flag (bool | list, optional): flag for tip and tilt. Defaults to False.
+            optax_flag (bool | list, optional): flag for the position of the optical axis.
+                Defaults to False.
             amplitude_flag (bool | list, optional): flag for image intensity. Recommended
                 to set to True. Defaults to True.
             background_flag (bool | list, optional): flag for adjusting the average
@@ -899,9 +908,11 @@ class Opticsetup():
             * add flag parameter in the list of args
             * update comments of the docstring about the new arg
             * encode new param
-            * create the list_flag
+            * update args in manage_fitting_flags()
             * decode after lmfit()
             * print result after decoding
+        - function manage_fitting_flags() :
+            * update function consequently
         - visualize_images() :
             * encode properly
         - README.dm
@@ -920,16 +931,17 @@ class Opticsetup():
         tmp = np.sum(self.img, axis=(1,2)) - np.median(self.img, axis=(1,2))*self.Ncrop**2
         tmp = tmp * self.N**2 / np.sum(self.pupillum**2)
         self.amplitude = np.sqrt(tmp)
-        print(f'Initial amplitude guess: {self.amplitude}')
+        np.set_printoptions(precision=3)
+        line('Amplitude 1st guess', self.amplitude, length=20)
         # create the list of coefficients to be fitted
         coeffs = self.encode_coefficients(self.defoc_z, self.focscale,
-                                          self.a2tip, self.a2tilt, self.amplitude,
+                                          self.optax_x, self.optax_y, self.amplitude,
                                           self.background, self.phase, self.illum,
                                           self.object_fwhm_pix)
         # ........ create the list of flags for the coefficients (in the exact
         # same order as in the call to encode_coefficients() just before !!)
         fit_flag = self.manage_fitting_flags(defoc_z_flag, focscale_flag,
-                                        tiptilt_flag, amplitude_flag,
+                                        optax_flag, amplitude_flag,
                                         background_flag, phase_flag, illum_flag,
                                         objsize_flag)
         # estimate the signal-to-noise ratio of the images in order to provide meaningful w=weights
@@ -939,30 +951,31 @@ class Opticsetup():
             # when snr is not estimated, the fit reduces to a least square
             self.weight = None
         # search for the best coefficients using lmfit
+        grint('Starting minimisation process:')
         bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=self.weight,
                            fit=fit_flag, tol=tolerance, verbose=verbose)
         # decode the coefficients and set/store them in the initial object.
-        (self.defoc_z, self.focscale, self.a2tip, self.a2tilt, self.amplitude,
+        (self.defoc_z, self.focscale, self.optax_x, self.optax_y, self.amplitude,
         self.background, self.phase, self.illum, self.object_fwhm_pix) = self.decode_coefficients(bestcoeffs)
 
         # ................................. Print the values of found coefficients
         grint( 'Best coefficients found:')
-        print(f'  focus scale        : {self.focscale:5.3f}')
-        print(f'  defoc * scale [mm] : {self.defoc_z*self.focscale*1e3}')
-        print(f'  wvl                : {self.wvl*1e9} nm')
-        print(f'  tip                : {self.a2tip}')
-        print(f'  tilt               : {self.a2tilt}')
-        print(f'  amplitude          : {self.amplitude}')
-        print(f'  background         : {self.background}')
-        print(f'  illumination       : {self.illum}')
-        print(f'  object fwhm [pix]  : {self.object_fwhm_pix}')
+        line('  focus scale', f'{self.focscale:5.3f}', length=20)
+        line('  defoc * scale', self.defoc_z*self.focscale*1e3, 'mm', length=20)
+        line('  wavelength', self.wvl*1e9, 'nm', length=20)
+        line('  x-pos opt axis', self.optax_x*self.rad2pix, 'pix', length=20)
+        line('  y-pos opt axis', self.optax_y*self.rad2pix, 'pix', length=20)
+        line('  amplitude', self.amplitude, length=20)
+        line('  background', self.background, length=20)
+        line('  illumination', self.illum, length=20)
+        line('  object fwhm', self.object_fwhm_pix, f'pixels ({self.object_shape})', length=20)
 
         # .................................. Do phase statistics
         phi_pupil_nm = self.phase_generator(self.phase) * self.wvl / (2*np.pi) * 1e9
         # Print the rms value of the phase
         rms_value = np.std(phi_pupil_nm)
         wrms_value = np.sqrt(np.sum(phi_pupil_nm**2 * self.pupillum) / np.sum(self.pupillum))
-        grint('\nPhase statistics :')
+        grint('Phase statistics :')
         print(f'                              (Raw)                   (Weighted)')
         print(f'  RMS phase value      : {rms_value:6.1f} nm rms             {wrms_value:6.1f} nm rms')
         
@@ -979,27 +992,25 @@ class Opticsetup():
         rms_value_notiltdef = np.std(phi_pupil_nm_notiltdef)
         wrms_value_notiltdef = np.sqrt(np.sum(phi_pupil_nm_notiltdef**2 * self.pupillum) / np.sum(self.pupillum))
         print(f'  RMS val wo TT & Def  : {rms_value_notiltdef:6.1f} nm rms             {wrms_value_notiltdef:6.1f} nm rms')
-        print(' ')
 
-        # Extract Zernike coefficients of tip, tilt, focus in nm rms
+        # Extract from phase the Zernike coefficients of tip, tilt, focus in nm rms
         ttf = self.convert * self.phase[0:3]
         a2_nmrms = ttf[0] * self.wvl / (2*np.pi) * 1e9
         a2_lD = ttf[0] * 4 / (2*np.pi)
-        a2_m = a2_lD * self.wvl * self.fratio
-        a2_pix = a2_m / self.pixelSize
+        a2_m = ttf[0] * self.rad2dist
+        a2_pix = ttf[0] * self.rad2pix
         a3_nmrms = ttf[1] * self.wvl / (2*np.pi) * 1e9
         a3_lD = ttf[1] * 4 / (2*np.pi)
-        a3_m = a3_lD * self.wvl * self.fratio
-        a3_pix = a3_m / self.pixelSize
+        a3_m = a3_lD * self.rad2dist
+        a3_pix = a3_m * self.rad2pix
         a4_nmrms = ttf[2] * self.wvl / (2*np.pi) * 1e9
-        a4_m = a4_nmrms * 16 * np.sqrt(3) * self.fratio**2 * 1e-9
+        a4_m = ttf[2] * self.rad2z
         a4_pix = a4_m / self.fratio / self.pixelSize
         grint('Values of tilt and defocus of the phase:')
         print( '                     nm rms              l/D             pixels             mm')
         print(f'Tip (horizontal) : {a2_nmrms:8.1f}          {a2_lD:8.3f}          {a2_pix:8.3f}          {a2_m*1e3:8.4f}')
         print(f'Tilt (vertical)  : {a3_nmrms:8.1f}          {a3_lD:8.3f}          {a3_pix:8.3f}          {a3_m*1e3:8.4f}')
         print(f'Defocus          : {a4_nmrms:8.1f}              x             {a4_pix:8.3f}          {a4_m*1e3:8.4f}')
-        print(' ')
 
         # ................................. Graphics
         # Create a 2x2 grid of subplots
@@ -1055,13 +1066,13 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
     Returns:
         ndarray: 1d array (flattened) of the series of PSF images. 
     """    
-    defoc_z, focscale, a2tip, a3tilt, amplitude, background, phase, illum, object_fwhm_pix = osetup.decode_coefficients(coeffs)
+    defoc_z, focscale, optax_x, optax_y, amplitude, background, phase, illum, object_fwhm_pix = osetup.decode_coefficients(coeffs)
     # convert defocus coeffs from delta-Z at focal plane, to radians RMS
-    defoc_a4 = focscale * defoc_z / (16 * np.sqrt(3) * osetup.fratio**2) * (2*np.pi) / osetup.wvl # in radians RMS
+    defoc_a4 = focscale * defoc_z / osetup.rad2z # in radians RMS
     # compute the various defocus maps (only on useful pixels)
     ph_defoc = osetup.defoc[None,:] * defoc_a4[:,None] # shape (nbim, nphi)
-    ph_tiptilt = osetup.tip[None,:] * a2tip[:,None] + osetup.tilt[None,:] * a3tilt[:,None] # shape (nbim, nphi)
-    tmp_phase = ph_tiptilt + ph_defoc + osetup.phase_generator(phase)
+    ph_optax = osetup.tip[None,:] * optax_x[:,None] + osetup.tilt[None,:] * optax_y[:,None] # shape (nbim, nphi)
+    tmp_phase = ph_optax + ph_defoc + osetup.phase_generator(phase)
     # compute the complex field 
     osetup.pupillum = osetup.compute_illumination(illum)
     tmp = osetup.pupillum[None,:]*np.exp(1j*tmp_phase) # shape (nbim, nphi)
@@ -1106,7 +1117,7 @@ def visualize_images(p : Opticsetup, alpha=1.0):
 
     # concatenate all relevant coefficients in a single array, to be ready to
     # make a call to the minimized function
-    coeffs = p.encode_coefficients(p.defoc_z, p.focscale, p.a2tip, p.a2tilt,
+    coeffs = p.encode_coefficients(p.defoc_z, p.focscale, p.optax_x, p.optax_y,
                                    p.amplitude, p.background, p.phase, p.illum,
                                    p.object_fwhm_pix)
     # Call to the central model function (returns all coefficients in a row)
@@ -1116,7 +1127,7 @@ def visualize_images(p : Opticsetup, alpha=1.0):
     # Recompute the position of the optical axis in pixels in order to plot it
     cc = p.img.shape[1] / 2 # centre of the image
     k = 4 * p.fratio * (1 * p.wvl / 2 / np.pi) / p.pixelSize # convert fact from a2[rad] to pixels
-    optax_x, optax_y = (cc-k*p.a2tip, cc-k*p.a2tilt) # optical axis position in pixels wrt img centre
+    optax_x, optax_y = (cc-k*p.optax_x, cc-k*p.optax_y) # optical axis position in pixels wrt img centre
     
     # Display the original and retrieved PSFs
     plt.figure(2)
