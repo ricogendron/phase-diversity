@@ -253,7 +253,7 @@ fitting. It is invoked as follows:
 ```python
    mysetup.search_phase(defoc_z_flag=False,
                            focscale_flag=False,
-                           tiptilt_flag=True,
+                           optax_flag=True,
                            amplitude_flag=True,
                            background_flag=False,
                            phase_flag=True,
@@ -278,15 +278,17 @@ In the above command the user can select which parameters are to be fitted.
    1.0 by default. It can sometimes be useful to tune it, when one is unsure of
    the estimation of the global amplitude of the input focus. 
 
-3) `tiptilt_flag` : either a scalar bool (True/False) or a list or array of bool,
-   with a length equal to the number of defocused images. At least one of the
-   elements of this array must be False to set one of the tiptilt to a fixed
-   value, otherwise the tiptilt will be undetermined. Using the scalar bool
-   value 'True' is equivalent to use a full array of 'True', except its first
-   element. The tiptilt value that is searched/optimised here accounts for a
-   potential random displacement of the optical axis between each defocused
-   image. Indeed it often happens that the experimental activation of the
-   defocusing actuator unvoluntarily modifies the image position too.
+3) `optax_flag` : either a scalar bool (True/False) or a list or array of bool,
+   with a length equal to the number of defocused images. Using the scalar bool
+   value `True` is equivalent to use a full array of `True`. Setting this flag
+   to True enables the search for a potential random displacement of the optical
+   axis between each defocused image. Indeed it is common that the
+   experimental activation of the defocusing actuator unvoluntarily modifies the
+   image position on the detector.
+   Setting all the flags to True for all images invalidates the search for tip
+   and tilt in the phase (as this would become a redundant DoF otherwise),
+   therefore the program will automatically set to `False` the tip and tilt
+   modes in the `phase_flag` (see § 6).
 
 4) `amplitude_flag` : bool value, True by default. Allows to search for the
    scaling factors on the total flux of each image.
@@ -298,12 +300,14 @@ In the above command the user can select which parameters are to be fitted.
 6) `phase_flag` : either a scalar bool (True/False) or a list or array of bool,
    with a length equal to the number of searched modal coefficients
    (`len(mysetup.phase)`). Allows to search for the modal coefficients of the
-   phase.
+   phase. 
    
 7) `illum_flag` : either a scalar bool (True/False) or a list or array of bool,
    with a length equal to the number of Zernike coefficients that define the
    pupil illumination (`len(mysetup.illum)`). The first coefficient of the array
-   (the piston mode, meaning a constant illumination) must be False.
+   (the piston mode, meaning a constant illumination) should be `False` in order
+   to avoid duplication of DoF with `amplitude_flag` in § 4 (however the program
+   will automatically do it anyway).
 
 8) `objsize_flag` : scalar bool. Attempt to fit (or not) the size of the object.
 
@@ -325,6 +329,12 @@ accessed using the following commands:
    mysetup.phase # modal coefficients of the phase
    mysetup.phase_generator(mysetup.phase) # zonal representation of the phase, all phase points in a row
    mysetup.mappy(mysetup.phase_generator(mysetup.phase)) # human-readable/plottable 2d representation of the phase
+   mysetup.illum # zernike coeffs of pupil illumination
+   mysetup.pupillum # values of the pupil illumination for each pixel of the pupil
+   mysetup.mappy(mysetup.pupillum) # 2D map of pupil illumination
+   mysetup.object_fwhm_pix # value of fwhm of the object in pixels
+   mysetup.optax_x # position of the optical axis along X in [rad rms of Zernike tip Z_2]
+   mysetup.optax_y # position of the optical axis along Y in [rad rms of Zernike tilt Z_3]
 ```
 
 The function `mysetup.search_phase()` starts from a first initial guess of the
