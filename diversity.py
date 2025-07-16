@@ -370,6 +370,7 @@ class Opticsetup():
         Returns:
             ndarray: list of the phase values in the pupil
         """
+        vector = np.array(vector)
         # size of the vector where matrix prod shall be done
         n = np.minimum(vector.size, self.phase_basis[0,:].size)
         # treatment of tiptilt and defoc flags
