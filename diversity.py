@@ -224,7 +224,10 @@ class Opticsetup():
 
         self.pupilType = ['disk','polygon','ELT'][pupilType] # self.pupilType = ['disk','polygon','VLT','ELT','GMT'][pupilType]  ... one beautiful day
         self.flattening = flattening
-        self.obscuration = obscuration
+        if obscuration<1.0:
+            self.obscuration = obscuration
+        else:
+            raise ValueError(f'Value of the obscuration is expressed relative to the pupil diameter. It must be in the interval [0, 1[ (not {obscuration}).')
         self.angle = angle
         self.nedges = nedges # only useful for polygon pupil
         
@@ -457,15 +460,18 @@ class Opticsetup():
 
         Returns:
             ndarray 2d: image of the pupil function.
-        """        
+        """
+        # central obscuration: work-around needed to really discard
+        # obscurations with a negative or null diameter<=0.0 
+        obs = self.obscuration if self.obscuration>1e-6 else -0.5
         c = np.cos(self.angle)
         s = np.sin(self.angle)
         u = self.x*c + self.y*s
         v = self.x*(-s/self.flattening) + self.y*(c/self.flattening)
         blur = self.edgeblur/100*self.pdiam
         # width and middle of donut
-        Am = self.pdiam*(1 + self.obscuration)/4 # middle between R and R.robs
-        Dm = self.pdiam*(1 - self.obscuration)/2 # width of the donut
+        Am = self.pdiam*(1 + obs)/4 # middle between R and R.robs
+        Dm = self.pdiam*(1 - obs)/2 # width of the donut
         if self.pupilType=='disk':
             # distance squared
             r2 = u*u + v*v
