@@ -263,35 +263,50 @@ fitting. It is invoked as follows:
                            verbose=True,
                            tolerance=1e-5)
 ```
-In the above command the user can select which parameters are to be fitted.
+The user can select which parameters are to be fitted by setting to `True` the
+corresponding flags.
 
-1) `defoc_z_flag` : either a scalar bool (True/False) or a list or array of bool,
-   with a length equal to the number of defocused images. At least one of the
-   elements of this array must be False to set one of the defocus to a fixed
-   value, otherwise the focus will be undetermined. Using the scalar bool value
-   'True' is equivalent to use a full array of 'True', except its first element.
-   Use this when you are unsure of your input defocus values and when option 2)
-   below is not sufficient.
+A parameter can be present (in either an apparent or hidden way) several times
+among the flags (as an example: the focus is present in the value of the
+defocus, in the scaling factor for the defocus, and in the defocus capacity of
+the phase itself : focus is a DoF that has potential duplicates). Setting all
+the corresponding flags to `True` leads to some redundancy in the search and in
+the end to an undetermination. This should be avoided. Therefore, the user is
+encouraged to select carefully the DoF that are potentially redundant.
+Nevertheless when redundancies are detected, the program won't stop but will
+just alert the user and force some of the flags `False` so as to remove any
+duplicate search.
+
+
+1) `defoc_z_flag` : either a scalar bool (True/False) or a list or array of
+   bool, with a length equal to the number of defocused images. Using the scalar
+   bool value 'True' is the same as using a full array of 'True'. Use this when
+   you are unsure of your input defocus values, and when option 2) below is not
+   sufficient. Redundancy issues (if any) are solved by setting the defocus of
+   the `phase_flag` (see § 6) to `False`, and blocking a supplementary DoF in
+   `defoc_z_flag` if not sufficient.
 
 2) `focscale_flag` : bool value. The focscale parameter is a scalar, global
    scaling factor that comes on top of the values of the defocus. It is set to
    1.0 by default. It can sometimes be useful to tune it, when one is unsure of
-   the estimation of the global amplitude of the input focus. 
+   the estimation of the global amplitude of the input focus. Redundancy issues
+   (if any) are solved by setting the defocus of the `phase_flag` (see § 6) to
+   `False`, and blocking a supplementary DoF in `defoc_z_flag` if not
+   sufficient.
 
 3) `optax_flag` : either a scalar bool (True/False) or a list or array of bool,
    with a length equal to the number of defocused images. Using the scalar bool
    value `True` is equivalent to use a full array of `True`. Setting this flag
-   to True enables the search for a potential random displacement of the optical
-   axis between each defocused image. Indeed it is common that the
-   experimental activation of the defocusing actuator unvoluntarily modifies the
-   image position on the detector.
-   Setting all the flags to True for all images invalidates the search for tip
-   and tilt in the phase (as this would become a redundant DoF otherwise),
-   therefore the program will automatically set to `False` the tip and tilt
-   modes in the `phase_flag` (see § 6).
+   to True enables the search for a potential random displacement of the
+   position of the optical axis between each defocused image. Indeed it is
+   common that the experimental activation of the defocusing actuator
+   unvoluntarily modifies the image position on the detector.
+   Redundancy issues (if any) are solved by setting the tip and tilt of the
+   `phase_flag` (see § 6) to `False`, leading to a tiptilt-free phase.
 
 4) `amplitude_flag` : bool value, True by default. Allows to search for the
-   scaling factors on the total flux of each image.
+   scaling factors on the total flux of each image. Redundancy issues (if any)
+   are solved by forcing the first term of the illumination to `False`.
 
 5) `background_flag` : bool value, True by default. Allows to search for a
    constant value to be added to each image, in view of compensating a possible
@@ -304,10 +319,9 @@ In the above command the user can select which parameters are to be fitted.
    
 7) `illum_flag` : either a scalar bool (True/False) or a list or array of bool,
    with a length equal to the number of Zernike coefficients that define the
-   pupil illumination (`len(mysetup.illum)`). The first coefficient of the array
-   (the piston mode, meaning a constant illumination) should be `False` in order
-   to avoid duplication of DoF with `amplitude_flag` in § 4 (however the program
-   will automatically do it anyway).
+   pupil illumination (`len(mysetup.illum)`). Redundancy issues with the
+   amplitude flag (if any) are solved by forcing the first term of the
+   illumination to `False`.
 
 8) `objsize_flag` : scalar bool. Attempt to fit (or not) the size of the object.
 
@@ -319,7 +333,8 @@ In the above command the user can select which parameters are to be fitted.
 10) `verbose` : bool. When `True`, print the iteration number, Chi2 and Progress
     (i.e. the decrease rate of the Chi2)
 
-11) `tolerance` : float. The minimization stops when `progress < tolerance`.
+11) `tolerance` : float. The minimization stops when `progress < tolerance`. The
+    default value is 1e-5.
 
 
 
