@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 plt.ion()
+from diversity import Opticsetup
 
 def symo(x, m):
     """

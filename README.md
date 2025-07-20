@@ -117,7 +117,9 @@ the experimental images to be processed.
    as follows:
    - 0: disk/ellipse
    - 1: regular polygon
-   - 2: ELT shape (not implemented yet, will come soon)
+   - 2: ELT shape
+   Be aware that the flattening factor (see §6) also applies to the ELT-type
+   pupil. Ensure that it is set to 1 if a non-distorted ELT pupil is expected.
 
 6) The user must provide the flattening factor of the pupil, useful for defining
    elliptical pupils. This factor will impact everything that is contained in
@@ -130,7 +132,7 @@ the experimental images to be processed.
 7) The user must provide the central obscuration diameter of the pupil. This
    factor will create a central obscuration with the same shape as the pupil. It
    also  applies  to polygonal  pupils.  It  has no unit,  it is  expressed as a
-   fraction of the pupil diameter. 
+   fraction of the pupil diameter. The parameter is ignored for ELT pupil (§ 5).
 
 8) The user must provide the angle of the "main pupil axis" in radians, positive
    angles rotate the whole pupil (shape, spiders, obscuration) counter
@@ -144,19 +146,20 @@ the experimental images to be processed.
 
 10) The user must provide the spider angle in radians. The spider angle affects
    the clocking of all the spider arms relative to the "main pupil axis", i.e.
-   to the rest of the pupil.
+   to the rest of the pupil. The parameter is ignored for ELT pupil (§ 5).
 
 11) The user must provide the width of each spider arms, expressed as a fraction
    of the pupil diameter measured along the "pupil main axis" (i.e. the
    non-flattened axis). The spider arms are straight lines. The number of arms
    is equal to the number of elements in this list. An empty list [] means no
-   spider.
+   spider. The parameter is ignored for ELT pupil (§ 5).
 
 12) The user must provide the offsets of the line of each spider arm wrt the
     center of the pupil, expressed as a fraction of the pupil diameter measured
     along the "pupil main axis" (i.e. the non-flattened axis). The length of the
     list must be equal to the length of the spiderArms list. Use [] if there is
-    no spider. Use [0,0,..,0] when everything is centred.
+    no spider. Use [0,0,..,0] when everything is centred. The parameter is
+    ignored for ELT pupil (§ 5).
 
 13) The user must provide the illumination coefficients of the pupil. The
     illumination map is described using Zernike coefficients (exceptionally they

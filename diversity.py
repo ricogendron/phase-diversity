@@ -10,7 +10,8 @@ Created on Fri Mar 28 18:08:47 2025
 import numpy as np
 import zernike as zer
 from lmfit_thiebaut import lmfit
-from utils import regress, grint, rrint, line
+from utilib import regress, grint, rrint, line
+import elt_pupil_simplified as eltps
 
 import matplotlib.pyplot as plt
 plt.ion() # interactive mode on, no need for plt.show() any more
@@ -222,7 +223,6 @@ class Opticsetup():
         
         self.focscale = 1.0
 
-        self.pupilType = ['disk','polygon','ELT'][pupilType] # self.pupilType = ['disk','polygon','VLT','ELT','GMT'][pupilType]  ... one beautiful day
         self.flattening = flattening
         if obscuration<1.0:
             self.obscuration = obscuration
@@ -231,10 +231,20 @@ class Opticsetup():
         self.angle = angle
         self.nedges = nedges # only useful for polygon pupil
         
-        self.spiderAngle = spiderAngle
-        self.spiderArms = spiderArms
-        self.spiderOffset = spiderOffset
-        self.nspider = len(self.spiderArms)
+        self.pupilType = ['disk','polygon','ELT'][pupilType] # self.pupilType = ['disk','polygon','ELT','VLT','GMT', 'JWST'][pupilType]  ... one beautiful day
+        if pupilType<2:
+            self.spiderAngle = spiderAngle
+            self.spiderArms = spiderArms
+            self.spiderOffset = spiderOffset
+            self.nspider = len(self.spiderArms)
+        elif self.pupilType=='ELT':
+            # sets the ELT spider parameters
+            self.spiderAngle = np.pi/6
+            self.spiderArms = np.full(6, 0.54/38.542)
+            self.spiderOffset = np.zeros(6)
+            self.nspider = 6
+            self.obscuration = 0.25 # just for getting graphic display ok
+
         self.edgeblur = np.maximum(edgeblur_percent, 1e-6) # in percent
 
         self.illum = illum # zernike list of illum, starting with piston
@@ -280,6 +290,31 @@ class Opticsetup():
         # Here we are going to define a new basis for the phase, that will be obtained
         # by diagonalisation of the matrix of the pairwise distances**(5/3) between the useful
         # pixels of the pupil.
+        if nphi>1500:
+            msg = f"""
+You have {nphi} degrees of freedom for the phase in the pupil. This is actually
+quite a lot. The computation may be quite intensive. Are you sure this is what
+you really want ? This situation may occur for several reasons but fundamentally,
+the area covered by the field of view
+contains at least {nphi}-times the area of the system's diffraction pattern.
+Perhaps this is what you actually want.
+If not, you may wish to consider changing the input parameters. This situation
+probably occurs because one (or more) of the following applies:
+ - Your input images are very large and should be cropped to a more
+   reasonable size (a large fraction of the FoV is useless). Simply use the
+   parameter N=.. to crop the images appropriately.
+ - The parameter N=... has been set to a value that is too large.
+ - The wavelength is incorrect (too short, resulting in a small Airy pattern).
+ - The f-ratio is incorrect (too small)
+ - The pixel size is incorrect (too large, mind the units : meters)
+ - Your images are severely undersampled: then we recommend avoiding any phase
+   diversity attempt on such data (at the risk of great frustration).
+            """
+            print(msg)
+            answer = input('Do you want to continue anyway [y/n] ?')
+            if answer!='y':
+                rrint('-- PROGRAM STOPS HERE. --')
+                return
         self.phase_basis = make_modal_basis(self.tip, self.tilt, self.defoc) # 3 first modes are tip, tilt and defoc
         self.phase = np.zeros(10)
 
@@ -483,6 +518,12 @@ class Opticsetup():
                 a = 2*np.pi*i/self.nedges
                 relief = np.maximum(np.cos(a)*u + np.sin(a)*v, relief)
             relief = (Dm/2 - np.abs(relief - Am))/blur 
+        elif self.pupilType=='ELT':
+            # direct call to ELT pupil computation. We pass (u,v) coordinates so
+            # that the computation will include the pupil angle. Warning: it
+            # will also include a flattening factor (if any).
+            # Version='old' means that spider arms are all 54 cm wide.
+            return eltps.simplified_elt_pupil(self.pdiam, self.edgeblur, u, v, version='old')
         else:
             relief = np.ones_like(u)
 
@@ -509,31 +550,30 @@ class Opticsetup():
             c = np.cos(angle)
             s = np.sin(angle)
             return (c*x - s*y, s*x + c*y)
+        
+        def plotpolygon(nedges,pdiam,flattening,angle,uc,vc,pltax,linewidth=linewidth,color=color):
+            th = np.linspace(0, 2*np.pi, nedges+1, endpoint=True) + np.pi/nedges
+            x = np.cos(th)*pdiam/2/np.cos(np.pi/nedges)
+            y = np.sin(th)*pdiam*flattening/2/np.cos(np.pi/nedges)
+            u, v = rotation(angle, x, y)
+            pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
 
         uc, vc = (self.N/2, self.N/2)
         if self.pupilType=='disk':
-            N = 222
-            th = np.linspace(0, 2*np.pi, N)
-            x = np.cos(th)*self.pdiam/2
-            y = np.sin(th)*self.pdiam*self.flattening/2
-            u, v = rotation(self.angle,x , y)
-            pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+            plotpolygon(222,self.pdiam,self.flattening,self.angle,uc,vc,pltax,linewidth=linewidth,color=color)
             if self.obscuration>0:
-                u = u * self.obscuration
-                v = v * self.obscuration
-                pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+                plotpolygon(222,self.pdiam*self.obscuration,self.flattening,self.angle,uc,vc,pltax,linewidth=linewidth,color=color)
         elif self.pupilType=='polygon':
-            th = np.linspace(0, 2*np.pi, self.nedges+1, endpoint=True) + np.pi/self.nedges
-            x = np.cos(th)*self.pdiam/2/np.cos(np.pi/self.nedges)
-            y = np.sin(th)*self.pdiam*self.flattening/2/np.cos(np.pi/self.nedges)
-            u, v = rotation(self.angle, x, y)
-            pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+            plotpolygon(self.nedges,self.pdiam,self.flattening,self.angle,uc,vc,pltax,linewidth=linewidth,color=color)
             if self.obscuration>0:
-                u = u * self.obscuration
-                v = v * self.obscuration
-                pltax.plot(u + uc, v + vc, linewidth=linewidth, color=color)
+                plotpolygon(self.nedges,self.pdiam*self.obscuration,self.flattening,self.angle,uc,vc,pltax,linewidth=linewidth,color=color)
+        elif self.pupilType=='ELT':
+            dp = self.pdiam * 0.97 # diameter of dodecagon that fits best to an ELT of diameter pdiam
+            dobs = self.pdiam * 0.251  # diameter of the hexagon that fits best to the obscuration of an ELT of diameter pdiam
+            plotpolygon(12,dp,self.flattening,self.angle,uc,vc,pltax,linewidth=linewidth,color=color)
+            plotpolygon(6,dobs,self.flattening,self.angle,uc,vc,pltax,linewidth=linewidth,color=color)
         else:
-            pass
+            raise ValueError(f'Pupil {self.pupilType} is unknown.')
 
         # Spiders arms
         for i in range(self.nspider):
