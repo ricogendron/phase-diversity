@@ -201,8 +201,42 @@ the experimental images to be processed.
     simulate the impact of detector pixels with an influence shape that would be
     larger than 1 pixel. 
 
-19) The user must provide the type of shape of the object. Possible choices
-    are either 'gaussian', 'disk' or 'square'.
+19) The user can optionally provide the type of shape of the object. Possible
+    choices are either `shape='gaussian'`, `'disk'` or `'square'`. The default is
+    `'gaussian'`.
+
+20) The user can optionally specify the type of modal basis used for the phase
+    search. The possible choices are `basis='eigen'`, `'eigenfull'`,
+    `'zernike'`, or `'zonal'`. The default is `basis='eigen'`, which is a
+    shortcut for _eigenmodes_. These eigenmodes form a basis for the vector
+    space of the pixels in the pupil, ordered by increasing spatial frequency.
+    The first two modes are tip and tilt, and the third is defocus. The
+    advantage of using eigenmodes is that they are always well-adapted to the
+    current pupil shape. The `'eigen'` option computes only the first `Jmax`
+    modes whereas the `basis='eigenfull'` option computes as many modes as there
+    are phase points. Only use `'eigenfull'` when searching for phase up to the
+    highest spatial frequencies. Eigenmodes can become problematic when the
+    number of phase pixels exceeds 1000(ish) due to the required computation
+    time.
+    The `'zernike'` modes are naturally well adapted for circular apertures.
+    They can be used when the `'eigen'` or `'eigenfull'` cannot do the job
+    (usually because the number of DoF is extremely large). With the Zernike,
+    the computational load for deriving the basis is decoupled from the number
+    of DoF. However, Zernike modes are convenient for a circular pupil but can
+    cause problems (usually at the edges of the pupil) for less circular
+    ones.
+    The `'zonal'` option is still under development. It searches the value of
+    each pixel independently, it can be subject to 2.pi jumps, and for the time
+    being it is not compatible with the phase analysis (tilt, defoc, RMS values)
+    the program performs, leading to erroneous values. Moreover is can only be
+    used when the number of DoF is small (<100).
+
+21) The user can optionally specify the number of modes `Jmax=...` that are to
+    be used. This is useful only when it is used together with the options
+    `basis='eigen'` or `'zernike'`. This parameter is ignored when `basis='eigenfull'`
+    and `'zonal'`. The default is `Jmax=55`. Change this parameter according to the
+    number of coefficients (i.e. spatial frequency) you aim to retrieve.
+
 
 An example of use is given below, with a fairly elliptic pupil barred with 2
 spiders:

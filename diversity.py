@@ -10,15 +10,50 @@ Created on Fri Mar 28 18:08:47 2025
 import numpy as np
 import zernike as zer
 from lmfit_thiebaut import lmfit
-from utilib import regress, grint, rrint, line
+from utilib import regress, grint, rrint, line, let_me_stop_here
 import elt_pupil_simplified as eltps
+from long_messages import msg_high_ndof, msg_low_ndof, msg_huge_ndof
+from long_messages import msg_limited_zernike_basis, msg_shannon_violated
 
 import matplotlib.pyplot as plt
 plt.ion() # interactive mode on, no need for plt.show() any more
 
 
+def make_zernike_basis(r, theta, Jmax):
+    """Author: EG
+    Compute a modal basis made of Zernike polynomials, defined on the useful
+    pixels of the pupil with the native sampling. The basis starts at Z2 (tip).
 
-def make_modal_basis(x, y, defoc):
+    Args:
+        r (ndarray): nomalised radius of polar coordinate over the pupil
+        theta (ndarray): angle of polar coordinate over the pupil
+        Jmax (int): number of the last Zernike mode to be computed
+    Returns:
+        2d ndarray: matrix of the column-vectors of the modes
+    """
+    nzer = Jmax-1
+    B = np.zeros((r.size, nzer))
+    for i in range(nzer):
+        B[:,i] = zer.zer(r, theta, i+2)
+    # Let's normalise the modes
+    B = B / np.sqrt((B**2).sum(axis=0))[None,:]
+    return B
+
+
+
+def make_modal_basis(x, y, defoc, Jmax):
+    from scipy.sparse.linalg import eigsh 
+    mat = ((x[:,None]-x[None,:])**2 + (y[:,None]-y[None,:])**2)**(5/6)
+    nphi = x.size
+    P = np.eye(nphi) - np.ones((nphi,nphi))/nphi # piston-removal matrix
+    mat = P @ mat @ P
+    # diagonalise the matrix. The eigenvalues are sorted in increasing order
+    s_eig, B = eigsh(mat, k=Jmax)
+    B = orthogonalize_basis_wrt_tiptiltdefoc(x, y, defoc, B)
+    return B
+
+
+def make_full_modal_basis(x, y, defoc):
     """Author: EG
     Compute a modal basis defined on the useful pixels of the pupil with the
     native sampling. The basis is ordered by increasing spatial frequencies, it
@@ -26,7 +61,7 @@ def make_modal_basis(x, y, defoc):
     pure tip, tilt and defocus. All the modes are orthogonal to piston.
 
     Args:
-        x (ndarray): x coordinate of all the pupil pixels, normalized to 1. at
+        x (ndarray): x coordinate of all the pupil pixels, normalized to 1.0 at
                      the edge of the pupil main axis.
         y (ndarray): idem in y
         defoc (ndarray): idem for r^2
@@ -44,6 +79,27 @@ def make_modal_basis(x, y, defoc):
     # Here we already have nice modes. But now we will remove the
     # tip-tilt-defoc contribution from all the modes, and put tiptiltdefoc
     # at the beginning of the basis.
+    B = orthogonalize_basis_wrt_tiptiltdefoc(x, y, defoc, B)
+    return B
+
+def orthogonalize_basis_wrt_tiptiltdefoc(x, y, defoc, B):
+    """Author: EG
+    Remove the pure tip, tilt and defocus from all the modes of a basis B and
+    replaces the modes that were closest to (tip, tilt, def) by their pure
+    version, and reorder vectors so that the returned basis starts with tip,
+    tilt, defoc, followed by all the rest. Also manages piston in order to get
+    all the modes orthogonal to piston.
+
+    Args:
+        x (ndarray)     : x coordinate of all the pupil pixels, normalized
+                          to 1.0 at the edge of the pupil main axis = pure tip.
+        y (ndarray)     : idem in y = pure tilt.
+        defoc (ndarray) : idem for r^2 = pure defocus.
+        B (ndarray)     : modal basis
+
+    Returns:
+        2d ndarray: matrix of the column-vectors of the modes
+    """
     defocop = defoc - np.mean(defoc) # orthogonalize wrt piston
     ttmat = np.array([x, y, defocop]).T  # tip-tilt-defoc matrix
     ttproj = np.linalg.pinv(ttmat) # projection matrix on tip-tilt-defoc
@@ -52,7 +108,7 @@ def make_modal_basis(x, y, defoc):
     # determine where were initially the closest modes resembling to tip, tilt, defoc in the basis
     ttd_index = np.argmax(np.abs(ttcomp), axis=1)
     # determine the index where all the other modes were
-    tmp = np.ones_like(x, dtype=bool)
+    tmp = np.ones_like(B[0,:], dtype=bool)
     tmp[ttd_index] = False
     (others_index,) = np.nonzero(tmp)
     # put tiptilt-defoc back in B at the beginning, followed by all the others
@@ -158,7 +214,8 @@ class Opticsetup():
                  pupilType, flattening, obscuration, angle, nedges,
                  spiderAngle, spiderArms, spiderOffset, illum,
                  wvl, fratio, pixelSize, edgeblur_percent,
-                 object_fwhm_pix, object_shape='gaussian'):
+                 object_fwhm_pix, object_shape='gaussian',
+                 basis='eigen', Jmax=55):
         """Author: EG
         Creation of the Opticsetup class.
 
@@ -203,6 +260,14 @@ class Opticsetup():
             object_fwhm_pix (float): FWHM of the object in [pixels]. The object is assumed to be either
                                 a Gaussian or a disk. A value of 0.0 means an infinitely small object.
             object_shape (str) : Shape of the object, either 'gaussian' or 'disk' or 'square'
+            basis (str)        : Type of basis of the vector space that represent the phase. It can be
+                                either 'eigen', 'zernike', or 'zonal'. Default is 'eigen'.
+            Jmax (int)         : Number of modes of the modal basis that shall be computed at
+                                initialization. This number must be larger than the size of all the
+                                self.phase vectors that may be used later on. Default is 55. A larger Jmax
+                                does not slow down the computation of the phase retrieval, it just takes
+                                more time at initialisation. This variable is only useful when the basis
+                                is 'eigen' or 'zernike', it is ignored otherwise.
         """
         # format the images and return a cube
         self.img = check_image_format(img_collection, xc, yc, N) # list of images
@@ -249,10 +314,35 @@ class Opticsetup():
 
         self.illum = illum # zernike list of illum, starting with piston
 
-        self.wvl = wvl # wavelength in [m]
-
+        # F-ratio .........
         self.fratio = fratio # ratio f/D
-        self.pixelSize = pixelSize # size of pixels in [m]
+
+        # Wavelength ..............
+        if wvl>1e-2:
+            print(f'Your wavelength is very large: {wvl*1e6} microns.')
+            print('This is suspicious. Check your input argument. The expected unit for')
+            print('the wavelength must be meters.')
+            if let_me_stop_here():
+                return
+        else:
+            self.wvl = wvl # wavelength in [m]
+
+        # Pixel size ..............
+        if pixelSize>1e-3:
+            print(f'Your pixel size is very large: {pixelSize*1e6} microns.')
+            print('This is suspicious. Check your input argument. The expected unit for')
+            print('the pixel size must be meters.')
+            if let_me_stop_here():
+                return
+        else:
+            self.pixelSize = pixelSize # size of pixels in [m]
+
+        # Check the image sampling ..........
+        sampling_factor = self.wvl * self.fratio / self.pixelSize
+        if sampling_factor<2.0:
+            print(msg_shannon_violated % (sampling_factor,))
+            if let_me_stop_here():
+                return
 
         # Evaluate the number of pixels required in the pupil diameter to
         # match the plate scale of the images
@@ -284,39 +374,90 @@ class Opticsetup():
         # displacement along the optical axis
         self.rad2z = (self.wvl / (2*np.pi)) * (16 * np.sqrt(3) * self.fratio**2)
 
-        # number of phase points that will be treated.
+        # number of phase points that will be involved/processed.
         nphi = self.idx[0].size
         line("Number of phase points in the pupil", nphi)
-        # Here we are going to define a new basis for the phase, that will be obtained
-        # by diagonalisation of the matrix of the pairwise distances**(5/3) between the useful
-        # pixels of the pupil.
-        if nphi>1500:
-            msg = f"""
-You have {nphi} degrees of freedom for the phase in the pupil. This is actually
-quite a lot. The computation may be quite intensive. Are you sure this is what
-you really want ? This situation may occur for several reasons but fundamentally,
-the area covered by the field of view
-contains at least {nphi}-times the area of the system's diffraction pattern.
-Perhaps this is what you actually want.
-If not, you may wish to consider changing the input parameters. This situation
-probably occurs because one (or more) of the following applies:
- - Your input images are very large and should be cropped to a more
-   reasonable size (a large fraction of the FoV is useless). Simply use the
-   parameter N=.. to crop the images appropriately.
- - The parameter N=... has been set to a value that is too large.
- - The wavelength is incorrect (too short, resulting in a small Airy pattern).
- - The f-ratio is incorrect (too small)
- - The pixel size is incorrect (too large, mind the units : meters)
- - Your images are severely undersampled: then we recommend avoiding any phase
-   diversity attempt on such data (at the risk of great frustration).
-            """
-            print(msg)
-            answer = input('Do you want to continue anyway [y/n] ?')
+        if nphi<20:
+            print(msg_low_ndof % (nphi, nphi))
+            answer = input('Do you want to continue anyway [y/n] ? ')
             if answer!='y':
-                rrint('-- PROGRAM STOPS HERE. --')
+                rrint('-- PROGRAM STOPS HERE. Bye ! --')
                 return
-        self.phase_basis = make_modal_basis(self.tip, self.tilt, self.defoc) # 3 first modes are tip, tilt and defoc
-        self.phase = np.zeros(10)
+
+        # Check that the variable 'basis' is correctly set ...........
+        possible_basis = ['eigenfull','eigen','zernike','zonal']
+        if basis not in possible_basis:
+            rrint(f"Improper value '{basis}' was given for the phase basis.")
+            print('Please select one of those :')
+            for item in possible_basis:
+                print(f"     basis='{item}'")
+            print('-- PROGRAM STOPS HERE. Bye ! --')
+            return
+        else:
+            self.basis_type = basis
+
+        # Start computing the basis of the phase ...............................
+        if self.basis_type=='eigenfull':
+            # Here we are going to define a new basis for the phase, that will
+            # be obtained by diagonalisation of the matrix of the pairwise
+            # distances**(5/3) between the useful pixels of the pupil. All the
+            # "nphi" modes will be computed here. Therefore it is important to
+            # verify that nphi has a "reasonnably small" value.
+            if nphi>1500:
+                duration_minutes = np.round(0.2 * (nphi/1000)**2.5, 1)
+                print(msg_high_ndof % (nphi, duration_minutes, nphi)) # big warning message, too many modes !
+                if let_me_stop_here():
+                    return
+            self.phase_basis = make_full_modal_basis(self.tip, self.tilt, self.defoc) # 3 first modes are tip, tilt and defoc
+            self.phase = np.zeros(10)
+
+        elif self.basis_type=='eigen':
+            # The modes computed here are based on the diagonalisation of the
+            # matrix of the pairwise distances**(5/3), but only Jmax modes will
+            # be computed. However one has to check that the number of DoF is 
+            # compatible with this kind of computation.
+            if nphi>4000:
+                MBytesRAM = int(np.rint(3*8*(nphi/1000)**2))
+                print(msg_huge_ndof % (nphi, MBytesRAM, nphi)) # big warning message, too many modes !
+                if let_me_stop_here():
+                    return
+            Jmax = np.minimum(Jmax, nphi)
+            self.phase_basis = make_modal_basis(self.tip, self.tilt, self.defoc, Jmax) # 3 first modes are tip, tilt and defoc
+            self.phase = np.zeros(10)
+
+        elif self.basis_type=='zernike':
+            # The Zernike basis is used when the 'eigen' or 'eigenfull' cannot
+            # do the job, probably because the number of DoF is extremely large.
+            # With the Zernike, the computational load for deriving the basis is
+            # decoupled from the value of nphi. However the Zernike are
+            # convenient for a circular pupil, but can (possibly) set problems
+            # (usually at the pupil edges) when the pupil become less and less
+            # circular.
+            Jmax = np.minimum(Jmax, nphi)
+            print(msg_limited_zernike_basis % (Jmax, Jmax-1))
+            self.phase_basis = make_zernike_basis(self.r, self.theta, Jmax)
+            self.phase = np.zeros(10)
+
+        elif self.basis_type=='zonal':
+            # The zonal basis enables the retrieval algorithm to utilise all
+            # degrees of freedom without the need to compute any basis. However,
+            # this has not yet been implemented cleanly. The management of
+            # tiptilt and defoc will be wrong, as well as the derivation of all
+            # the RMS values and the expression of the phase with/without
+            # tiptilt and defoc. Units are wrong as well.
+            # 
+            # TODO in the future: add tip, tilt and focus at the beginning of
+            # the basis, and remove/block 3 phase points (on a nice large
+            # triangle in the pupil ?), and change the phase_generator()
+            # function to treat this as a 3-vector basis only
+            print('WARNING: zonal basis is not yet fully properly implemented. Use at your own risk.')
+            self.phase_basis = np.eye(nphi, nphi)
+            self.phase = np.zeros(nphi)
+
+        else:
+            print('What the fuck are we doing here ???')
+            print('Panic STOP. Exiting right now.')
+            return
 
         # The modes are normalized in a weird way, that depends on the shape of
         # the pupil. Below we search the normalisation factor with the zernike
@@ -409,6 +550,8 @@ probably occurs because one (or more) of the following applies:
             ndarray: list of the phase values in the pupil
         """
         vector = np.array(vector)
+        if self.basis_type=='zonal':
+            return vector
         # size of the vector where matrix prod shall be done
         n = np.minimum(vector.size, self.phase_basis[0,:].size)
         # treatment of tiptilt and defoc flags

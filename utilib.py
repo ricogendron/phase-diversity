@@ -88,3 +88,10 @@ def line(msg, val, *args, length=60, getval=False):
         print( chain )
  
     
+def let_me_stop_here():    
+    answer = input('Do you want to continue anyway [y/n] ? ')
+    if answer!='y':
+        rrint('-- PROGRAM STOPS HERE. Bye ! --')
+        return True
+    else:
+        return False
