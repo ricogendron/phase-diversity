@@ -297,6 +297,7 @@ fitting. It is invoked as follows:
                            illum_flag=False,
                            objsize_flag=False,
                            estimate_snr=False,
+                           saturation_limit=np.inf,
                            verbose=True,
                            tolerance=1e-5)
 ```
@@ -367,10 +368,14 @@ duplicate search.
    least-square fit will be done. The noise will be estimated on the image. This
    feature kind of .. work (more or less), but is still under development.
 
-10) `verbose` : bool. When `True`, print the iteration number, Chi2 and Progress
+10) `saturation_limit` : scalar. The pixel values that are larger than the
+   saturation limit are considered to be wrong and will be eliminated from the
+   fit (They receive a weight=0.0). The default value is infinite (np.inf).
+
+11) `verbose` : bool. When `True`, print the iteration number, Chi2 and Progress
     (i.e. the decrease rate of the Chi2)
 
-11) `tolerance` : float. The minimization stops when `progress < tolerance`. The
+12) `tolerance` : float. The minimization stops when `progress < tolerance`. The
     default value is 1e-5.
 
 

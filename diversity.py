@@ -312,7 +312,7 @@ class Opticsetup():
 
         self.edgeblur = np.maximum(edgeblur_percent, 1e-6) # in percent
 
-        self.illum = illum # zernike list of illum, starting with piston
+        self.illum = np.array(illum) # zernike list of illum, starting with piston
 
         # F-ratio .........
         self.fratio = fratio # ratio f/D
@@ -590,26 +590,37 @@ class Opticsetup():
         return pupillum
 
 
-    def mappy(self, contents, within=None):
+    def mappy(self, contents, within=None, masked=False):
         """
-        Transforms a vector of values defined over the pupil area to a 2D map of
-        the same size as the image. The values are set to zero outside the pupil
-        area. The function also allows to initialize the map with a given array
+        Transforms a vector of values defined over the pupil area to a 2D representation of
+        the pupil. The values are set to zero outside the pupil
+        area. The function also allows to initialize the map with some particular given array
         (within).
 
         Args:
             contents (ndarray): vector of values defined over the pupil area.
             within (2d ndarray, optional): array to initialize the map. If None,
             the map is initialized to zero.
+            masked (bool, optional): when True a "masked numpy array" is returned
+            instead of just a numpy array.
 
         Returns:
             2d ndarray: 2D map of the same size as the image.
         """        
         if within is None:
+            # create a variable with same dimensions as <contents> except that
+            # the number of values (=last dimension) is replaced by the 2
+            # dimensions of the size of the image
             var = np.zeros(contents.shape[:-1] + (self.N, self.N), dtype=contents.dtype)
         else:
+            # make a copy of the input array <within> to avoid overwriting any
+            # data
             var = within.copy().astype(contents.dtype)
         var[...,self.idx[0],self.idx[1]] = contents
+        if masked==True:
+            mask = np.ones_like(var, dtype=bool)
+            mask[...,self.idx[0],self.idx[1]] = False
+            var = np.ma.array(var, mask=mask)
         return var
 
 
@@ -1035,6 +1046,31 @@ class Opticsetup():
         weight = 1./vartot
         return weight
 
+    def discard_saturated_values(self, saturation_limit):
+        """
+        Set the weights of the setup object to 0.0 when pixel values are above
+        the saturation limit. The corresponding pixels will be eliminated from
+        the fit. The attribute self.weight is modified by this function.
+        Args:
+            saturation_limit (float): Pixel value where the saturation domain
+            begins.
+        """
+        # When there is no saturation limit (infinite value) the weight is
+        # unchanged
+        if saturation_limit==np.inf:
+            return
+        # Test of saturated pixels
+        saturated_bool = self.img > saturation_limit
+        nb_saturated_bool = np.count_nonzero(saturated_bool)
+        # If no pixel is saturated the weight array is unchanged
+        if nb_saturated_bool==0:
+            return 
+        # If saturated pixels exist their weight will be set to 0.0 but first
+        # one check for the existence of the weight array
+        if self.weight is None:
+            self.weight = np.ones_like(self.img)
+        self.weight[saturated_bool] = 0.0
+
     def search_phase(self, defoc_z_flag=False,
                      focscale_flag=False,
                      optax_flag=False,
@@ -1044,6 +1080,7 @@ class Opticsetup():
                      illum_flag=False,
                      objsize_flag=False,
                      estimate_snr=False,
+                     saturation_limit=np.inf,
                      verbose=False,
                      tolerance=1e-5):
         """
@@ -1079,6 +1116,8 @@ class Opticsetup():
                 illumination coeffs of the pupil. Defaults to False.
             estimate_snr (bool, optional): flag for estimating (or not) the weighting
                 coefficients of the fit, based on the signal-to-noise
+            saturation_limit (float, optional): threshold for discarding large pixel
+                values with a risk of non-linearity or saturation. Defaults to np.inf.
             objsize_flag (bool, optional): flag for estimating (or not) the diameter
                 of the object
             verbose (bool, optional): flag for printing things when running. Defaults
@@ -1140,6 +1179,8 @@ class Opticsetup():
         else:
             # when snr is not estimated, the fit reduces to a least square
             self.weight = None
+        # discard pixels values above the saturation limit
+        self.discard_saturated_values(saturation_limit)
         # search for the best coefficients using lmfit
         grint('Starting minimisation process:')
         bestcoeffs = lmfit(compute_psfs, self, coeffs, self.img, w=self.weight,
@@ -1206,11 +1247,15 @@ class Opticsetup():
         # Create a 2x2 grid of subplots
         plt.figure(1)
         plt.clf()
+        # failed attempt to display an interpolated version of the phase : this
+        # doesnt go well with the 'masked' arrays option
+        interpolation = None
+        cmap = 'gray' 
         zone = ((self.N-self.pdiam*1.1)/2, (self.N+self.pdiam*1.1)/2)
         fig, axes = plt.subplots(2, 2, num=1, figsize=(10, 8))  # nbim rows, 3 columns
         # Plot the retrieved phase first
         phase_map = self.mappy(phi_pupil_nm_notilt)
-        im = axes[0, 0].imshow(phase_map.T, cmap='gray', origin='lower')
+        im = axes[0, 0].imshow(phase_map.T, origin='lower', cmap=cmap, interpolation=interpolation)
         axes[0, 0].set_title(f'Retrieved phase [nm] / {wrms_value_notilt:6.1f} nm rms')
         axes[0, 0].set_xlim(zone)
         axes[0, 0].set_ylim(zone)
@@ -1218,8 +1263,8 @@ class Opticsetup():
         self.pupilArtist(axes[0,0])
         fig.colorbar(im, ax=axes[0,0])
         # Plot the retrieved phase with no defocus
-        phase_map = self.mappy(phi_pupil_nm_notiltdef)
-        im = axes[0, 1].imshow(phase_map.T, cmap='gray', origin='lower')
+        phase_map = self.mappy(phi_pupil_nm_notiltdef, masked=True)
+        im = axes[0, 1].imshow(phase_map.T, origin='lower', cmap=cmap, interpolation=interpolation)
         axes[0, 1].set_title(f'Retrieved phase [nm] / {wrms_value_notiltdef:6.1f} nm rms')
         axes[0, 1].set_xlim(zone)
         axes[0, 1].set_ylim(zone)
@@ -1227,7 +1272,7 @@ class Opticsetup():
         self.pupilArtist(axes[0,1])
         fig.colorbar(im, ax=axes[0,1])
         # Plot the PSF difference in the third column
-        axes[1, 0].imshow(self.mappy(self.pupillum).T, cmap='gray', origin='lower')
+        axes[1, 0].imshow(self.mappy(self.pupillum).T, origin='lower', cmap=cmap, interpolation=interpolation)
         axes[1, 0].set_title('Pupil illumination')
         axes[1, 0].set_xlim(zone)
         axes[1, 0].set_ylim(zone)
@@ -1289,16 +1334,19 @@ def compute_psfs(osetup : Opticsetup, coeffs : np.ndarray):
 
 
 
-def visualize_images(p : Opticsetup, alpha=1.0):
+def visualize_images(p : Opticsetup, alpha=1.0, satlim=np.inf):
     """
     Allows to see a summary, presented by a graphic display organized in 3
-    columns, of the series of the input data images, the modelled ones, and
-    their differences. 
+    columns: the series of the input data images, the modelled ones, and their
+    differences. 
 
     Args:
-        p (Opticsetup): the optical setup object
-        alpha (float, optional): a power exponent, to reinforce the visibility
-        of the low-level details. Defaults to 1.0.
+        p (Opticsetup)          : the optical setup object
+        alpha (float, optional) : a power exponent, to reinforce the visibility
+                                  of the low-level details. Defaults to 1.0.
+        satlim (float, optional): saturation limit (image display will be
+                                  clipped to that value and their difference
+                                  will be 0).
     """
     def xsoft(image, alpha):
         # Formats the image to get ready for display with improved contrast.
@@ -1326,17 +1374,17 @@ def visualize_images(p : Opticsetup, alpha=1.0):
     fig, axes = plt.subplots(p.nbim, 3, num=2, figsize=(10, 8))  # nbim rows, 3 columns
     for i in range(p.nbim):
         # Plot the PSF in the first column
-        axes[i, 0].imshow(xsoft(p.img[i]-p.background[i], alpha=alpha), cmap='gray', origin='lower')
+        axes[i, 0].imshow(xsoft(np.clip(p.img[i]-p.background[i],None,satlim), alpha=alpha), cmap='gray', origin='lower')
         axes[i, 0].set_title(f"Input PSF {i+1}")
         axes[i, 0].axis('off')
         axes[i, 0].scatter(optax_x[i:i+1], optax_y[i:i+1], marker='+', color='r') # show optical axis
         # Plot the other PSF in the second column
-        axes[i, 1].imshow(xsoft(retrieved_psf[i]-p.background[i], alpha=alpha), cmap='gray', origin='lower')
+        axes[i, 1].imshow(xsoft(np.clip(retrieved_psf[i]-p.background[i],None,satlim), alpha=alpha), cmap='gray', origin='lower')
         axes[i, 1].set_title(f"Retrieved PSF {i+1}")
         axes[i, 1].axis('off')
         axes[i, 1].scatter(optax_x[i:i+1], optax_y[i:i+1], marker='+', color='r') # show optical axis
         # Plot the PSF difference in the third column
-        axes[i, 2].imshow(xsoft(p.img[i]-retrieved_psf[i], alpha=1.0), cmap='gray', origin='lower')
+        axes[i, 2].imshow(xsoft(np.clip(p.img[i],None,satlim)-np.clip(retrieved_psf[i],None,satlim), alpha=1.0), cmap='gray', origin='lower')
         axes[i, 2].set_title(f"Diff input-retrieved {i+1}")
         axes[i, 2].scatter(optax_x[i:i+1], optax_y[i:i+1], marker='+', color='r') # show optical axis
         axes[i, 2].axis('off')
